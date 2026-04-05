@@ -31,6 +31,8 @@ import sys
 import re
 import signal
 import argparse
+import math
+import socket
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
@@ -777,6 +779,7 @@ def init_csv():
         ],
         SPEED_LOG: [
             "timestamp", "test_name", "speed_mbps", "time_seconds", "http_code",
+            "dns_ms", "connect_ms", "tls_ms", "ttfb_ms",
         ],
     }
     for path, headers in files_headers.items():
@@ -886,20 +889,82 @@ def estimate_speed():
         url = "https://speed.cloudflare.com/__down?bytes=10000000"
         null_dev = "NUL" if IS_WINDOWS else "/dev/null"
         cmd = ["curl", "-o", null_dev, "-s", "-w",
-               "%{speed_download} %{time_total} %{http_code}",
+               "%{speed_download} %{time_total} %{http_code}"
+               " %{time_namelookup} %{time_connect} %{time_appconnect} %{time_starttransfer}",
+               "--max-time", "30", url]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
+        parts = r.stdout.strip().split()
+        if len(parts) >= 3:
+            result = {
+                "test_name": "cloudflare_10MB",
+                "speed_mbps": round(float(parts[0]) * 8 / 1_000_000, 2),
+                "time_seconds": float(parts[1]),
+                "http_code": parts[2],
+            }
+            if len(parts) >= 7:
+                result["dns_ms"] = round(float(parts[3]) * 1000, 1)
+                result["connect_ms"] = round(float(parts[4]) * 1000, 1)
+                result["tls_ms"] = round(float(parts[5]) * 1000, 1)
+                result["ttfb_ms"] = round(float(parts[6]) * 1000, 1)
+            return result
+    except Exception:
+        pass
+    return None
+
+
+UPLOAD_TEST_SIZE = 2_000_000  # 2MB
+
+
+def estimate_upload_speed():
+    """Upload speed test using Cloudflare endpoint."""
+    import tempfile
+    tmp_path = None
+    try:
+        # Generate random payload to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as tmp:
+            tmp.write(os.urandom(UPLOAD_TEST_SIZE))
+            tmp_path = tmp.name
+        url = "https://speed.cloudflare.com/__up"
+        cmd = ["curl", "-s", "-X", "POST", "-F", f"file=@{tmp_path}", "-w",
+               "%{speed_upload} %{time_total} %{http_code}",
+               "-o", "NUL" if IS_WINDOWS else "/dev/null",
                "--max-time", "30", url]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
         parts = r.stdout.strip().split()
         if len(parts) >= 3:
             return {
-                "test_name": "cloudflare_10MB",
+                "test_name": "cloudflare_upload_2MB",
                 "speed_mbps": round(float(parts[0]) * 8 / 1_000_000, 2),
                 "time_seconds": float(parts[1]),
                 "http_code": parts[2],
             }
     except Exception:
         pass
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
     return None
+
+
+DNS_TEST_DOMAINS = ["google.com", "cloudflare.com", "amazon.com"]
+
+
+def test_dns_resolution():
+    """Measure DNS resolution time using system resolver."""
+    results = []
+    for domain in DNS_TEST_DOMAINS:
+        start = time.time()
+        try:
+            socket.getaddrinfo(domain, 80, socket.AF_INET)
+            elapsed_ms = (time.time() - start) * 1000
+            results.append({"domain": domain, "time_ms": round(elapsed_ms, 1), "ok": True})
+        except socket.gaierror:
+            elapsed_ms = (time.time() - start) * 1000
+            results.append({"domain": domain, "time_ms": round(elapsed_ms, 1), "ok": False})
+    return results
 
 
 # ── Progressive Trace ─────────────────────────────────────────────────────
@@ -926,7 +991,7 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
 
     if not route:
         print(f"  {YELLOW}Nie mozna odkryc trasy do {target}{RESET}")
-        return {"ok_runs": 0, "fail_runs": RUNS_PER_TARGET, "faults": []}
+        return {"ok_runs": 0, "fail_runs": RUNS_PER_TARGET, "faults": [], "rtt_stats": {}, "route": []}
 
     # Show discovered route
     route_hosts = [h["host"] for h in route if h["host"] != "???"]
@@ -951,6 +1016,7 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
     fail_runs = 0
     faults = []  # list of {hop_num, host, zone}
     failed_runs_detail = []  # raw evidence for failed runs
+    rtt_samples = []  # RTT from successful end-to-end runs
 
     # Per-hop counters for this cycle
     hop_reached = defaultdict(int)   # hop_num -> times packet passed through
@@ -1006,6 +1072,8 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
                     if known_hops.get(prev_ttl, "???") != "???":
                         pass  # already counted when they were ttl_exceeded
                 run_result = "ok"
+                if rtt is not None:
+                    rtt_samples.append(rtt)
                 rtt_str = f" {rtt:.0f}ms" if rtt else ""
                 break
 
@@ -1070,6 +1138,27 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
         if run_idx < RUNS_PER_TARGET - 1 and not shutdown_check():
             time.sleep(PAUSE_BETWEEN_RUNS)
 
+    # --- RTT statistics ---
+    rtt_stats = {}
+    if rtt_samples:
+        n = len(rtt_samples)
+        rtt_avg = sum(rtt_samples) / n
+        rtt_min = min(rtt_samples)
+        rtt_max = max(rtt_samples)
+        rtt_stddev = math.sqrt(sum((x - rtt_avg) ** 2 for x in rtt_samples) / n) if n > 1 else 0.0
+        # Jitter = mean absolute difference between consecutive RTTs
+        jitter = 0.0
+        if n > 1:
+            jitter = sum(abs(rtt_samples[i] - rtt_samples[i - 1]) for i in range(1, n)) / (n - 1)
+        rtt_stats = {
+            "min": round(rtt_min, 1),
+            "max": round(rtt_max, 1),
+            "avg": round(rtt_avg, 1),
+            "stddev": round(rtt_stddev, 1),
+            "jitter": round(jitter, 1),
+            "samples": n,
+        }
+
     # --- Cycle summary for this target ---
     total = ok_runs + fail_runs
     ok_pct = (ok_runs / total * 100) if total > 0 else 0
@@ -1082,6 +1171,9 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
         color = YELLOW
 
     print(f"  {color}{ok_runs}/{total} OK ({ok_pct:.0f}%){RESET}", end="")
+    if rtt_stats:
+        print(f"  {DIM}avg {rtt_stats['avg']:.0f}ms "
+              f"(jitter {rtt_stats['jitter']:.0f}ms){RESET}", end="")
 
     if faults:
         # Count faults per zone
@@ -1126,6 +1218,7 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
         "cycle": cycle_num, "runs": total,
         "ok": ok_runs, "fail": fail_runs,
         "faults": faults,
+        "rtt_stats": rtt_stats,
         "hop_reached": dict(hop_reached),
         "hop_failed": dict(hop_failed),
         "failed_runs_detail": failed_runs_detail,
@@ -1149,7 +1242,8 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
             stats["total_incidents"] += 1
             stats["zone_incidents"][worst_zone] += 1
 
-    return {"ok_runs": ok_runs, "fail_runs": fail_runs, "faults": faults}
+    return {"ok_runs": ok_runs, "fail_runs": fail_runs, "faults": faults, "rtt_stats": rtt_stats,
+            "route": [h["host"] for h in route]}
 
 
 # ── Display ───────────────────────────────────────────────────────────────
@@ -2388,6 +2482,9 @@ def monitor():
     last_speed_test = 0
     session_start = time.time()
 
+    previous_routes = {}  # target -> list of hop IPs (for route stability)
+    route_changes = 0
+
     drop_state = {
         "in_drop": False,
         "start_time": None,
@@ -2466,6 +2563,21 @@ def monitor():
                 if shutdown_requested:
                     break
                 result = run_trace_cycle(name, target, cycle, stats, is_shutdown)
+
+                # Route stability check
+                new_route = result.get("route", [])
+                if new_route and name in previous_routes:
+                    old_route = previous_routes[name]
+                    if new_route != old_route:
+                        route_changes += 1
+                        log_event("route_change", {
+                            "target_name": name, "target": target,
+                            "cycle": cycle,
+                            "old_route": old_route, "new_route": new_route,
+                        })
+                        print(f"  {YELLOW}Zmiana trasy do {name}!{RESET}")
+                if new_route:
+                    previous_routes[name] = new_route
                 cycle_ok += result["ok_runs"]
                 cycle_fail += result["fail_runs"]
                 cycle_faults.extend(result["faults"])
@@ -2474,6 +2586,20 @@ def monitor():
 
             if shutdown_requested:
                 break
+
+            # --- DNS resolution test ---
+            dns_results = test_dns_resolution()
+            if dns_results:
+                avg_dns = sum(r["time_ms"] for r in dns_results if r["ok"]) / max(1, sum(1 for r in dns_results if r["ok"]))
+                log_event("dns_test", {"cycle": cycle, "results": dns_results, "avg_ms": round(avg_dns, 1)})
+                dns_ok = [r for r in dns_results if r["ok"]]
+                if dns_ok:
+                    dns_max = max(r["time_ms"] for r in dns_ok)
+                    color = RED if dns_max > 100 else (YELLOW if dns_max > 50 else GREEN)
+                    print(f"  {DIM}DNS: avg {avg_dns:.0f}ms, max {dns_max:.0f}ms{RESET}", end="")
+                    if dns_max > 100:
+                        print(f"  {RED}(powolny!){RESET}", end="")
+                    print()
 
             # --- Quick ping targets (batch) ---
             ping_ok = 0
@@ -2577,8 +2703,28 @@ def monitor():
                     csv_append(SPEED_LOG, [
                         ts, speed["test_name"], speed["speed_mbps"],
                         speed["time_seconds"], speed["http_code"],
+                        speed.get("dns_ms", ""), speed.get("connect_ms", ""),
+                        speed.get("tls_ms", ""), speed.get("ttfb_ms", ""),
                     ])
                     log_event("speed_test", speed)
+                    print(f"  {DIM}Download: {speed['speed_mbps']} Mbps{RESET}", end="")
+                    if speed.get("dns_ms"):
+                        print(f"  {DIM}| DNS {speed['dns_ms']:.0f}ms "
+                              f"| TCP {speed['connect_ms']:.0f}ms "
+                              f"| TLS {speed['tls_ms']:.0f}ms "
+                              f"| TTFB {speed['ttfb_ms']:.0f}ms{RESET}", end="")
+                    print()
+
+                upload = estimate_upload_speed()
+                if upload:
+                    csv_append(SPEED_LOG, [
+                        ts, upload["test_name"], upload["speed_mbps"],
+                        upload["time_seconds"], upload["http_code"],
+                        "", "", "", "",
+                    ])
+                    log_event("speed_test", upload)
+                    print(f"  {DIM}Upload: {upload['speed_mbps']} Mbps{RESET}")
+
                 last_speed_test = now_t
 
             # --- Periodic stats ---
@@ -2627,6 +2773,7 @@ def monitor():
         "drops": stats["total_drops"],
         "downtime_seconds": round(drop_time, 1),
         "uptime_pct": round(uptime, 1),
+        "route_changes": route_changes,
     })
 
     print_session_summary(cycle, elapsed, stats, drop_time, uptime)
