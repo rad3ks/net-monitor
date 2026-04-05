@@ -1664,8 +1664,11 @@ def generate_dashboard(days=30):
         print(f"{RED}Brak danych. Uruchom najpierw monitoring.{RESET}")
         return
 
-    data_json = json.dumps(data, indent=2, default=str)
-    html = _build_dashboard_html(data_json, days)
+    payload = json.dumps({
+        "sessions": data,
+        "monitor": {"running": False},
+    }, indent=2, default=str)
+    html = _build_dashboard_html(payload, days)
 
     out_path = REPORT_DIR / "dashboard.html"
     try:
@@ -1680,16 +1683,57 @@ def generate_dashboard(days=30):
     webbrowser.open(f"file://{out_path}")
 
 
+def _check_monitor_status():
+    """Check if monitoring is currently running. Returns dict with status info."""
+    lock_path = DATA_DIR / "monitor.lock"
+    if not lock_path.exists():
+        return {"running": False}
+
+    try:
+        pid = int(lock_path.read_text().strip())
+        if _pid_alive(pid):
+            # Find which session dir is active (most recent)
+            active_session = None
+            if OUTPUT_DIR.exists():
+                dirs = sorted(
+                    (d for d in OUTPUT_DIR.iterdir() if d.is_dir()),
+                    reverse=True
+                )
+                if dirs:
+                    active_session = dirs[0].name
+            return {
+                "running": True,
+                "pid": pid,
+                "session": active_session,
+            }
+        else:
+            return {"running": False}
+    except (ValueError, OSError):
+        return {"running": False}
+
+
 def live_dashboard(days=30, port=8077):
     """Run a live dashboard with auto-refresh via a local HTTP server."""
     from http.server import HTTPServer, BaseHTTPRequestHandler
     ensure_dirs()
 
+    # Check and show monitor status at startup
+    status = _check_monitor_status()
+    if status["running"]:
+        print(f"  {GREEN}Monitoring aktywny{RESET} (PID {status['pid']}"
+              f"{', sesja: ' + status['session'] if status.get('session') else ''})")
+    else:
+        print(f"  {YELLOW}Monitoring nieaktywny{RESET} — uruchom w innym terminalu")
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path == "/data":
                 data = _build_dashboard_data(days)
-                payload = json.dumps(data or [], default=str)
+                status = _check_monitor_status()
+                payload = json.dumps({
+                    "sessions": data or [],
+                    "monitor": status,
+                }, default=str)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
@@ -1697,8 +1741,12 @@ def live_dashboard(days=30, port=8077):
                 self.wfile.write(payload.encode())
             elif self.path == "/" or self.path == "/index.html":
                 data = _build_dashboard_data(days)
-                data_json = json.dumps(data or [], indent=2, default=str)
-                html = _build_dashboard_html(data_json, days, live=True)
+                status = _check_monitor_status()
+                init_payload = json.dumps({
+                    "sessions": data or [],
+                    "monitor": status,
+                }, indent=2, default=str)
+                html = _build_dashboard_html(init_payload, days, live=True)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
@@ -1747,12 +1795,14 @@ def _build_dashboard_html(data_json, days, live=False):
     try {
       var resp = await fetch('/data');
       if (!resp.ok) return;
-      var newData = await resp.json();
-      var newHash = JSON.stringify(newData);
+      var payload = await resp.json();
+      var sessions = payload.sessions || payload;
+      MONITOR = payload.monitor || {};
+      var newHash = JSON.stringify(sessions);
       if (newHash !== lastDataHash) {
         lastDataHash = newHash;
         DATA.length = 0;
-        newData.forEach(function(d) { DATA.push(d); });
+        sessions.forEach(function(d) { DATA.push(d); });
         var prevIdx = activeIdx;
         renderSidebar();
         if (prevIdx >= 0 && prevIdx < DATA.length) {
@@ -1762,6 +1812,7 @@ def _build_dashboard_html(data_json, days, live=False):
         }
         indicator.innerHTML = '&#9679; LIVE &#8635; ' + new Date().toLocaleTimeString();
       }
+      renderStatusBar();
     } catch(e) {
       indicator.style.color = 'var(--red)';
       indicator.innerHTML = '&#9679; OFFLINE';
@@ -1919,8 +1970,12 @@ tr:hover td {{ background: var(--bg3); }}
 
 </div>
 
+<div id="status-bar" style="display:none;position:fixed;bottom:0;left:0;right:0;padding:6px 16px;font-size:0.78em;font-family:monospace;z-index:100;border-top:1px solid var(--border)"></div>
+
 <script>
-const DATA = {data_json};
+const _INIT = {data_json};
+const DATA = _INIT.sessions || _INIT;
+let MONITOR = _INIT.monitor || {{}};
 let activeIdx = -1;
 
 const ZONE_COLORS = {{
@@ -2257,9 +2312,30 @@ function escHtml(s) {{
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }}
 
+// ── Monitor status bar ──
+function renderStatusBar() {{
+  var bar = document.getElementById('status-bar');
+  if (!bar) return;
+  if (MONITOR && MONITOR.running) {{
+    bar.style.display = 'block';
+    bar.style.background = '#0d1117';
+    bar.style.color = '#3fb950';
+    bar.innerHTML = '\u25cf Monitoring aktywny &mdash; PID ' + MONITOR.pid
+      + (MONITOR.session ? ' | sesja: ' + MONITOR.session : '');
+  }} else if (Object.keys(MONITOR).length) {{
+    bar.style.display = 'block';
+    bar.style.background = '#0d1117';
+    bar.style.color = '#d29922';
+    bar.innerHTML = '\u25cb Monitoring nieaktywny';
+  }} else {{
+    bar.style.display = 'none';
+  }}
+}}
+
 // ── Init ──
 renderSidebar();
 if (DATA.length) selectSession(DATA.length - 1);
+renderStatusBar();
 {live_js}
 </script>
 </body>
