@@ -182,7 +182,24 @@ Skanuje wszystkie katalogi w `output/`, agreguje dane, generuje:
 - JSON z pelnymi statystykami
 - Markdown po polsku gotowy do reklamacji
 
-### 6.2. Analiza z Claude Code / Cowork
+### 6.2. `--dashboard` — HTML dashboard
+
+Self-contained HTML z:
+- Sidebar z wyborem sesji
+- Metryki: total runs, OK, fail, success rate
+- Wykresy kolowe: bledy per strefa, bledy per hop/IP
+- Tabela awarii per hop z identyfikacja IP
+- Historia RSSI WiFi w czasie
+- Sfailowane runy z surowym outputem pinga (dowod na brak false positive)
+- Timeline wizualizacja
+
+### 6.3. `--live` — Live dashboard
+
+Serwer HTTP (domyslnie port 8077) serwujacy dashboard z auto-odswiezaniem co 5s.
+Dashboard sam odpytuje `/data` endpoint i re-renderuje widok gdy dane sie zmienia.
+Uzycie: w jednym terminalu monitoring, w drugim `--live`.
+
+### 6.4. Analiza z Claude Code / Cowork
 
 Plik `analyze_prompt.md` zawiera gotowy prompt analityczny. Uzycie:
 
@@ -210,11 +227,21 @@ Claude przeczyta `events.jsonl` + `connection_info.json` z kazdej sesji i przygo
 | Zaleznosc | Typ | Instalacja |
 |---|---|---|
 | Python 3.8+ | Runtime | Preinstalowany |
-| `traceroute` | System | Preinstalowany (macOS/Linux) |
-| `ping` | System | Preinstalowany |
-| `curl` | System | Preinstalowany |
+| `traceroute` | System | macOS/Linux: preinstalowany. Windows: `tracert` (wbudowany) |
+| `ping` | System | Preinstalowany (flagi roznia sie per platforma) |
+| `curl` | System | macOS/Linux: preinstalowany. Windows 10+: wbudowany |
 
-Brak pip dependencies. Brak `mtr` (zamieniony na `traceroute` + TTL-based `ping`).
+Brak pip dependencies. Obsługiwane platformy: **macOS, Linux, Windows**.
+
+### 8.1. Roznice miedzy platformami
+
+| Element | macOS | Linux | Windows |
+|---|---|---|---|
+| TTL ping | `ping -m TTL` | `ping -t TTL` | `ping -i TTL` |
+| Traceroute | `traceroute -n` | `traceroute -n` | `tracert -d` |
+| Info o sieci | `system_profiler`, `ifconfig`, `scutil` | `iw`, `ip`, `ethtool` | `ipconfig`, `netsh wlan` |
+| WiFi signal | RSSI (dBm) | RSSI (dBm) | Signal % (konwertowane na dBm) |
+| Graceful shutdown | SIGINT + SIGTERM | SIGINT + SIGTERM | SIGINT (Ctrl+C) |
 
 ## 9. Edge cases
 
@@ -226,6 +253,7 @@ Brak pip dependencies. Brak `mtr` (zamieniony na `traceroute` + TTL-based `ping`
 | Ctrl+C | Graceful shutdown + podsumowanie |
 | Zmiana sieci w trakcie | Wykryta i zalogowana |
 | Brak danych przy --report | Czytelny komunikat |
+| Dwa procesy naraz | Lockfile (PID-based) blokuje drugie uruchomienie |
 
 ## 10. Pliki projektu
 

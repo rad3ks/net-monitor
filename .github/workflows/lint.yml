@@ -1,0 +1,27 @@
+name: Lint & Static Analysis
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install linters
+        run: pip install flake8 pylint
+
+      - name: Syntax check
+        run: python -m py_compile net_monitor.py
+
+      - name: Flake8
+        run: flake8 net_monitor.py --max-line-length=120 --ignore=E501,W503,W504,E226,E231,E305,E402,E722,F541,F841
+
+      - name: Pylint
+        run: pylint net_monitor.py --disable=C,R,W0612,W0613,W0622,W0702,W0718,W1514 --max-line-length=120 || true

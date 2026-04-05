@@ -28,7 +28,6 @@ import os
 import sys
 import re
 import signal
-import statistics
 import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -103,10 +102,79 @@ _enable_windows_vt()
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
+LOCKFILE = None  # set in acquire_lock()
+
+
 def ensure_dirs():
     DATA_DIR.mkdir(exist_ok=True)
     OUTPUT_DIR.mkdir(exist_ok=True)
     REPORT_DIR.mkdir(exist_ok=True)
+
+
+def acquire_lock():
+    """Prevent multiple monitor instances from running simultaneously.
+    Uses a PID-based lockfile in DATA_DIR. Returns True if lock acquired."""
+    global LOCKFILE
+    lock_path = DATA_DIR / "monitor.lock"
+
+    # Check existing lock
+    if lock_path.exists():
+        try:
+            content = lock_path.read_text().strip()
+            old_pid = int(content)
+            # Check if process is still alive
+            if _pid_alive(old_pid):
+                print(f"{RED}Net Monitor juz dziala (PID {old_pid}).{RESET}")
+                print(f"{DIM}Jesli to blad, usun reczne: {lock_path}{RESET}")
+                return False
+            else:
+                # Stale lock — previous process died
+                lock_path.unlink()
+        except (ValueError, OSError):
+            # Corrupted lock — remove
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+
+    # Write our PID
+    try:
+        lock_path.write_text(str(os.getpid()))
+        LOCKFILE = lock_path
+        return True
+    except OSError as e:
+        print(f"{RED}Nie mozna utworzyc lockfile: {e}{RESET}")
+        return False
+
+
+def release_lock():
+    """Release the lockfile."""
+    global LOCKFILE
+    if LOCKFILE and LOCKFILE.exists():
+        try:
+            LOCKFILE.unlink()
+        except OSError:
+            pass
+        LOCKFILE = None
+
+
+def _pid_alive(pid):
+    """Check if a process with given PID is alive."""
+    if IS_WINDOWS:
+        try:
+            r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                               capture_output=True, text=True, timeout=5)
+            return str(pid) in r.stdout
+        except Exception:
+            return False
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # alive but owned by another user
 
 
 def setup_session_dir():
@@ -1460,14 +1528,11 @@ def load_sessions(days=30):
     return sessions
 
 
-def generate_dashboard(days=30):
-    """Generate a self-contained HTML dashboard."""
-    ensure_dirs()
+def _build_dashboard_data(days=30):
+    """Build session summaries for the dashboard. Returns list of dicts or None."""
     sessions = load_sessions(days)
-
     if not sessions:
-        print(f"{RED}Brak danych. Uruchom najpierw monitoring.{RESET}")
-        return
+        return None
 
     session_summaries = []
     for s in sessions:
@@ -1588,8 +1653,22 @@ def generate_dashboard(days=30):
         }
         session_summaries.append(summary)
 
-    data_json = json.dumps(session_summaries, indent=2, default=str)
-    html = _build_dashboard_html(data_json, days)
+    return session_summaries
+
+
+def generate_dashboard(days=30):
+    """Generate a self-contained HTML dashboard."""
+    ensure_dirs()
+    data = _build_dashboard_data(days)
+    if not data:
+        print(f"{RED}Brak danych. Uruchom najpierw monitoring.{RESET}")
+        return
+
+    payload = json.dumps({
+        "sessions": data,
+        "monitor": {"running": False},
+    }, indent=2, default=str)
+    html = _build_dashboard_html(payload, days)
 
     out_path = REPORT_DIR / "dashboard.html"
     try:
@@ -1604,7 +1683,146 @@ def generate_dashboard(days=30):
     webbrowser.open(f"file://{out_path}")
 
 
-def _build_dashboard_html(data_json, days):
+def _check_monitor_status():
+    """Check if monitoring is currently running. Returns dict with status info."""
+    lock_path = DATA_DIR / "monitor.lock"
+    if not lock_path.exists():
+        return {"running": False}
+
+    try:
+        pid = int(lock_path.read_text().strip())
+        if _pid_alive(pid):
+            # Find which session dir is active (most recent)
+            active_session = None
+            if OUTPUT_DIR.exists():
+                dirs = sorted(
+                    (d for d in OUTPUT_DIR.iterdir() if d.is_dir()),
+                    reverse=True
+                )
+                if dirs:
+                    active_session = dirs[0].name
+            return {
+                "running": True,
+                "pid": pid,
+                "session": active_session,
+            }
+        else:
+            return {"running": False}
+    except (ValueError, OSError):
+        return {"running": False}
+
+
+def live_dashboard(days=30, port=8077):
+    """Run a live dashboard with auto-refresh via a local HTTP server."""
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    ensure_dirs()
+
+    # Check and show monitor status at startup
+    status = _check_monitor_status()
+    if status["running"]:
+        print(f"  {GREEN}Monitoring aktywny{RESET} (PID {status['pid']}"
+              f"{', sesja: ' + status['session'] if status.get('session') else ''})")
+    else:
+        print(f"  {YELLOW}Monitoring nieaktywny{RESET} — uruchom w innym terminalu")
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/data":
+                data = _build_dashboard_data(days)
+                status = _check_monitor_status()
+                payload = json.dumps({
+                    "sessions": data or [],
+                    "monitor": status,
+                }, default=str)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(payload.encode())
+            elif self.path == "/" or self.path == "/index.html":
+                data = _build_dashboard_data(days)
+                status = _check_monitor_status()
+                init_payload = json.dumps({
+                    "sessions": data or [],
+                    "monitor": status,
+                }, indent=2, default=str)
+                html = _build_dashboard_html(init_payload, days, live=True)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(html.encode())
+            else:
+                self.send_error(404)
+
+        def log_message(self, format, *args):
+            pass  # suppress request logs
+
+    url = f"http://localhost:{port}"
+    print(f"\n{BOLD}Net Monitor — Live Dashboard{RESET}")
+    print(f"{GREEN}  {url}{RESET}")
+    print(f"{DIM}  Auto-refresh co 5s | Ctrl+C aby zatrzymac{RESET}\n")
+
+    import webbrowser
+    webbrowser.open(url)
+
+    try:
+        server = HTTPServer(("", port), Handler)
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print(f"\n{DIM}Dashboard zatrzymany.{RESET}")
+    except OSError as e:
+        if "Address already in use" in str(e):
+            print(f"{RED}Port {port} jest zajety. Uzyj --port N{RESET}")
+        else:
+            raise
+
+
+def _build_dashboard_html(data_json, days, live=False):
+    live_js = ""
+    if live:
+        live_js = """
+// ── Live auto-refresh ──
+(function() {
+  var POLL_INTERVAL = 5000;
+  var indicator = document.createElement('div');
+  indicator.style.cssText = 'position:fixed;top:8px;right:12px;font-size:0.75em;color:var(--green);z-index:999;font-family:monospace';
+  indicator.innerHTML = '&#9679; LIVE';
+  document.body.appendChild(indicator);
+
+  var lastDataHash = JSON.stringify(DATA);
+
+  async function poll() {
+    try {
+      var resp = await fetch('/data');
+      if (!resp.ok) return;
+      var payload = await resp.json();
+      var sessions = payload.sessions || payload;
+      MONITOR = payload.monitor || {};
+      var newHash = JSON.stringify(sessions);
+      if (newHash !== lastDataHash) {
+        lastDataHash = newHash;
+        DATA.length = 0;
+        sessions.forEach(function(d) { DATA.push(d); });
+        var prevIdx = activeIdx;
+        renderSidebar();
+        if (prevIdx >= 0 && prevIdx < DATA.length) {
+          selectSession(prevIdx);
+        } else if (DATA.length) {
+          selectSession(DATA.length - 1);
+        }
+        indicator.innerHTML = '&#9679; LIVE &#8635; ' + new Date().toLocaleTimeString();
+      }
+      renderStatusBar();
+    } catch(e) {
+      indicator.style.color = 'var(--red)';
+      indicator.innerHTML = '&#9679; OFFLINE';
+      setTimeout(function() { indicator.style.color = 'var(--green)'; }, 2000);
+    }
+  }
+
+  setInterval(poll, POLL_INTERVAL);
+})();
+"""
     return f'''<!DOCTYPE html>
 <html lang="pl">
 <head>
@@ -1752,8 +1970,12 @@ tr:hover td {{ background: var(--bg3); }}
 
 </div>
 
+<div id="status-bar" style="display:none;position:fixed;bottom:0;left:0;right:0;padding:6px 16px;font-size:0.78em;font-family:monospace;z-index:100;border-top:1px solid var(--border)"></div>
+
 <script>
-const DATA = {data_json};
+const _INIT = {data_json};
+const DATA = _INIT.sessions || _INIT;
+let MONITOR = _INIT.monitor || {{}};
 let activeIdx = -1;
 
 const ZONE_COLORS = {{
@@ -2090,9 +2312,31 @@ function escHtml(s) {{
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }}
 
+// ── Monitor status bar ──
+function renderStatusBar() {{
+  var bar = document.getElementById('status-bar');
+  if (!bar) return;
+  if (MONITOR && MONITOR.running) {{
+    bar.style.display = 'block';
+    bar.style.background = '#0d1117';
+    bar.style.color = '#3fb950';
+    bar.innerHTML = '\u25cf Monitoring aktywny &mdash; PID ' + MONITOR.pid
+      + (MONITOR.session ? ' | sesja: ' + MONITOR.session : '');
+  }} else if (Object.keys(MONITOR).length) {{
+    bar.style.display = 'block';
+    bar.style.background = '#0d1117';
+    bar.style.color = '#d29922';
+    bar.innerHTML = '\u25cb Monitoring nieaktywny';
+  }} else {{
+    bar.style.display = 'none';
+  }}
+}}
+
 // ── Init ──
 renderSidebar();
 if (DATA.length) selectSession(DATA.length - 1);
+renderStatusBar();
+{live_js}
 </script>
 </body>
 </html>'''
@@ -2102,6 +2346,10 @@ if (DATA.length) selectSession(DATA.length - 1);
 
 def monitor():
     ensure_dirs()
+
+    if not acquire_lock():
+        sys.exit(1)
+
     session_dir = setup_session_dir()
     init_csv()
 
@@ -2351,6 +2599,7 @@ def monitor():
         print(f"\n{RED}Error: {e}{RESET}")
         import traceback
         traceback.print_exc()
+        release_lock()
 
     # --- Graceful shutdown ---
     elapsed = time.time() - session_start
@@ -2379,6 +2628,7 @@ def monitor():
     })
 
     print_session_summary(cycle, elapsed, stats, drop_time, uptime)
+    release_lock()
 
 
 # ── Clean / Purge ────────────────────────────────────────────────────────
@@ -2500,6 +2750,7 @@ def print_help():
   {GREEN}(brak opcji){RESET}            Uruchom monitoring (ciagly, Ctrl+C aby zatrzymac)
   {GREEN}--report{RESET}                Generuj raport Markdown + JSON z zebranych danych
   {GREEN}--dashboard{RESET}             Generuj interaktywny HTML dashboard i otworz w przegladarce
+  {GREEN}--live{RESET}                  Dashboard na zywo — auto-refresh co 5s (serwer HTTP)
 
 {BOLD}Zarzadzanie danymi:{RESET}
   {GREEN}--list{RESET}                  Wyswietl liste sesji z rozmiarem
@@ -2511,6 +2762,7 @@ def print_help():
 {BOLD}Opcje:{RESET}
   {GREEN}--days N{RESET}                Okres w dniach — dla raportu/dashboardu/clean older
                           {DIM}(domyslnie: 30){RESET}
+  {GREEN}--port N{RESET}                Port serwera HTTP dla --live {DIM}(domyslnie: 8077){RESET}
 
 {BOLD}Przyklady:{RESET}
   {DIM}# Nowy pomiar od zera:{RESET}
@@ -2522,6 +2774,9 @@ def print_help():
 
   {DIM}# Dashboard ze wszystkich sesji:{RESET}
   python3 net_monitor.py --dashboard
+
+  {DIM}# Live dashboard (odswiezany co 5s):{RESET}
+  python3 net_monitor.py --live
 
   {DIM}# Porzadki — usun stare, zostaw ostatni tydzien:{RESET}
   python3 net_monitor.py --clean older --days 7
@@ -2558,6 +2813,10 @@ if __name__ == "__main__":
                         help="Generuj raport MD+JSON z zebranych danych")
     parser.add_argument("--dashboard", action="store_true",
                         help="Generuj HTML dashboard i otworz w przegladarce")
+    parser.add_argument("--live", action="store_true",
+                        help="Live dashboard z auto-refresh (serwer HTTP)")
+    parser.add_argument("--port", type=int, default=8077,
+                        help="Port serwera HTTP dla --live (domyslnie: 8077)")
     parser.add_argument("--list", action="store_true",
                         help="Wylistuj wszystkie sesje")
     parser.add_argument("--clean", nargs="?", const="all",
@@ -2583,6 +2842,8 @@ if __name__ == "__main__":
         else:
             print(f"{YELLOW}Usuwanie: {mode}...{RESET}")
         clean_logs(mode=mode, keep_days=args.days)
+    elif args.live:
+        live_dashboard(args.days, args.port)
     elif args.dashboard:
         generate_dashboard(args.days)
     elif args.report:
