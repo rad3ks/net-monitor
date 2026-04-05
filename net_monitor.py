@@ -1928,10 +1928,13 @@ def _check_monitor_status():
                 "pid": pid,
                 "session": active_session,
             }
-            # Read live progress if available
+            # Read live progress if available (ignore stale > 60s)
             try:
-                result["live"] = json.loads(LIVE_STATUS.read_text())
-            except (json.JSONDecodeError, OSError):
+                live = json.loads(LIVE_STATUS.read_text())
+                live_ts = live.get("ts", "")
+                if live_ts and (datetime.now() - datetime.fromisoformat(live_ts)).total_seconds() <= 60:
+                    result["live"] = live
+            except (json.JSONDecodeError, OSError, ValueError):
                 pass
             return result
         else:
@@ -2469,9 +2472,9 @@ function renderSession(s) {{
     <div class="card">
       <h2>${{t('session')}}: ${{s.start || s.name}}</h2>
       <div class="conn-grid">
-        <div class="conn-cell"><div class="cl">${{t('iface')}}</div><div class="cv">${{s.interface}} (${{s.interface_type}})</div></div>
-        <div class="conn-cell"><div class="cl">${{t('ip')}}</div><div class="cv">${{s.ip}}</div></div>
-        <div class="conn-cell"><div class="cl">${{t('gateway')}}</div><div class="cv">${{s.gateway}}</div></div>
+        <div class="conn-cell"><div class="cl">${{t('iface')}}</div><div class="cv">${{escHtml(s.interface)}} (${{escHtml(s.interface_type)}})</div></div>
+        <div class="conn-cell"><div class="cl">${{t('ip')}}</div><div class="cv">${{escHtml(s.ip)}}</div></div>
+        <div class="conn-cell"><div class="cl">${{t('gateway')}}</div><div class="cv">${{escHtml(s.gateway)}}</div></div>
         ${{s.wifi_ssid ? `
           <div class="conn-cell"><div class="cl">${{t('ssid')}}</div><div class="cv">${{escHtml(s.wifi_ssid)}}</div></div>
           <div class="conn-cell"><div class="cl">${{t('signal')}}</div><div class="cv">${{s.wifi_rssi||'?'}} dBm</div></div>
@@ -2678,7 +2681,7 @@ function renderFailedRuns(runs) {{
           <span style="color:var(--fg2);margin:0 8px">${{time}}</span>
           <span style="color:var(--fg2)">${{escHtml(r.target)}}</span>
           <span style="margin-left:8px">&#10007; ${{hopInfo}}</span>
-          <span class="hop-zone ${{zclass}}" style="margin-left:6px">${{r.fail_zone||'?'}}</span>
+          <span class="hop-zone ${{zclass}}" style="margin-left:6px">${{escHtml(r.fail_zone||'?')}}</span>
         </div>
       </div>
       <div class="failed-run-body">`;
@@ -2689,11 +2692,11 @@ function renderFailedRuns(runs) {{
       if (h.status === 'skipped') {{
         html += `<span class="hop-badge hop-skip">${{h.ttl}}:???</span>`;
       }} else if (h.status === 'timeout') {{
-        html += `<span class="hop-badge hop-fail">${{h.ttl}}:${{h.hop}} TIMEOUT</span>`;
+        html += `<span class="hop-badge hop-fail">${{h.ttl}}:${{escHtml(h.hop)}} TIMEOUT</span>`;
       }} else if (h.status === 'reached') {{
         html += `<span class="hop-badge hop-ok">${{h.ttl}}:&#10003; ${{h.rtt_ms ? h.rtt_ms.toFixed(0)+'ms' : ''}}</span>`;
       }} else {{
-        html += `<span class="hop-badge hop-ok">${{h.ttl}}:${{h.hop_ip||h.hop}}</span>`;
+        html += `<span class="hop-badge hop-ok">${{h.ttl}}:${{escHtml(h.hop_ip||h.hop)}}</span>`;
       }}
     }});
     html += '</div>';
@@ -2716,8 +2719,9 @@ function renderFailedRuns(runs) {{
 }}
 
 function escHtml(s) {{
-  if (!s) return '';
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  if (s == null) return '';
+  s = String(s);
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }}
 
 // ── Stability metrics cards ──
