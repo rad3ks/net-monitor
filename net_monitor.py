@@ -31,6 +31,10 @@ import sys
 import re
 import signal
 import argparse
+import math
+import socket
+import tempfile
+import concurrent.futures
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
@@ -777,6 +781,7 @@ def init_csv():
         ],
         SPEED_LOG: [
             "timestamp", "test_name", "speed_mbps", "time_seconds", "http_code",
+            "dns_ms", "connect_ms", "tls_ms", "ttfb_ms",
         ],
     }
     for path, headers in files_headers.items():
@@ -886,20 +891,98 @@ def estimate_speed():
         url = "https://speed.cloudflare.com/__down?bytes=10000000"
         null_dev = "NUL" if IS_WINDOWS else "/dev/null"
         cmd = ["curl", "-o", null_dev, "-s", "-w",
-               "%{speed_download} %{time_total} %{http_code}",
+               "%{speed_download} %{time_total} %{http_code}"
+               " %{time_namelookup} %{time_connect} %{time_appconnect} %{time_starttransfer}",
+               "--max-time", "30", url]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
+        parts = r.stdout.strip().split()
+        if len(parts) >= 3:
+            result = {
+                "test_name": "cloudflare_10MB",
+                "speed_mbps": round(float(parts[0]) * 8 / 1_000_000, 2),
+                "time_seconds": float(parts[1]),
+                "http_code": parts[2],
+            }
+            if len(parts) >= 7:
+                t_dns = float(parts[3])
+                t_conn = float(parts[4])
+                t_tls = float(parts[5])
+                t_ttfb = float(parts[6])
+                result["dns_ms"] = round(t_dns * 1000, 1)
+                result["connect_ms"] = round((t_conn - t_dns) * 1000, 1)
+                result["tls_ms"] = round((t_tls - t_conn) * 1000, 1)
+                result["ttfb_ms"] = round((t_ttfb - t_tls) * 1000, 1)
+            return result
+    except Exception:
+        pass
+    return None
+
+
+UPLOAD_TEST_SIZE = 2_000_000  # 2MB
+
+
+def estimate_upload_speed():
+    """Upload speed test using Cloudflare endpoint."""
+    tmp_path = None
+    try:
+        # Generate random payload to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as tmp:
+            tmp.write(os.urandom(UPLOAD_TEST_SIZE))
+            tmp_path = tmp.name
+        url = "https://speed.cloudflare.com/__up"
+        cmd = ["curl", "-s", "-T", tmp_path, "-w",
+               "%{speed_upload} %{time_total} %{http_code}",
+               "-o", "NUL" if IS_WINDOWS else "/dev/null",
                "--max-time", "30", url]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
         parts = r.stdout.strip().split()
         if len(parts) >= 3:
             return {
-                "test_name": "cloudflare_10MB",
+                "test_name": "cloudflare_upload_2MB",
                 "speed_mbps": round(float(parts[0]) * 8 / 1_000_000, 2),
                 "time_seconds": float(parts[1]),
                 "http_code": parts[2],
             }
     except Exception:
         pass
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
     return None
+
+
+DNS_TEST_DOMAINS = ["google.com", "cloudflare.com", "amazon.com"]
+
+
+DNS_TIMEOUT = 3  # seconds
+
+
+def _resolve_domain(domain):
+    """Resolve a single domain and return elapsed ms."""
+    start = time.time()
+    socket.getaddrinfo(domain, 80, socket.AF_INET)
+    return round((time.time() - start) * 1000, 1)
+
+
+def test_dns_resolution():
+    """Measure DNS resolution time using system resolver (with thread-based timeout)."""
+    results = []
+    for domain in DNS_TEST_DOMAINS:
+        start = time.time()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = executor.submit(_resolve_domain, domain)
+            ms = fut.result(timeout=DNS_TIMEOUT)
+            results.append({"domain": domain, "time_ms": ms, "ok": True})
+        except (concurrent.futures.TimeoutError, OSError):
+            elapsed_ms = round((time.time() - start) * 1000, 1)
+            results.append({"domain": domain, "time_ms": elapsed_ms, "ok": False})
+        finally:
+            executor.shutdown(wait=False)
+    return results
 
 
 # ── Progressive Trace ─────────────────────────────────────────────────────
@@ -926,7 +1009,7 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
 
     if not route:
         print(f"  {YELLOW}Nie mozna odkryc trasy do {target}{RESET}")
-        return {"ok_runs": 0, "fail_runs": RUNS_PER_TARGET, "faults": []}
+        return {"ok_runs": 0, "fail_runs": RUNS_PER_TARGET, "faults": [], "rtt_stats": {}, "route": []}
 
     # Show discovered route
     route_hosts = [h["host"] for h in route if h["host"] != "???"]
@@ -951,6 +1034,7 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
     fail_runs = 0
     faults = []  # list of {hop_num, host, zone}
     failed_runs_detail = []  # raw evidence for failed runs
+    rtt_samples = []  # RTT from successful end-to-end runs
 
     # Per-hop counters for this cycle
     hop_reached = defaultdict(int)   # hop_num -> times packet passed through
@@ -1006,6 +1090,8 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
                     if known_hops.get(prev_ttl, "???") != "???":
                         pass  # already counted when they were ttl_exceeded
                 run_result = "ok"
+                if rtt is not None:
+                    rtt_samples.append(rtt)
                 rtt_str = f" {rtt:.0f}ms" if rtt else ""
                 break
 
@@ -1070,6 +1156,27 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
         if run_idx < RUNS_PER_TARGET - 1 and not shutdown_check():
             time.sleep(PAUSE_BETWEEN_RUNS)
 
+    # --- RTT statistics ---
+    rtt_stats = {}
+    if rtt_samples:
+        n = len(rtt_samples)
+        rtt_avg = sum(rtt_samples) / n
+        rtt_min = min(rtt_samples)
+        rtt_max = max(rtt_samples)
+        rtt_stddev = math.sqrt(sum((x - rtt_avg) ** 2 for x in rtt_samples) / n) if n > 1 else 0.0
+        # Jitter = mean absolute difference between consecutive RTTs
+        jitter = 0.0
+        if n > 1:
+            jitter = sum(abs(rtt_samples[i] - rtt_samples[i - 1]) for i in range(1, n)) / (n - 1)
+        rtt_stats = {
+            "min": round(rtt_min, 1),
+            "max": round(rtt_max, 1),
+            "avg": round(rtt_avg, 1),
+            "stddev": round(rtt_stddev, 1),
+            "jitter": round(jitter, 1),
+            "samples": n,
+        }
+
     # --- Cycle summary for this target ---
     total = ok_runs + fail_runs
     ok_pct = (ok_runs / total * 100) if total > 0 else 0
@@ -1082,6 +1189,9 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
         color = YELLOW
 
     print(f"  {color}{ok_runs}/{total} OK ({ok_pct:.0f}%){RESET}", end="")
+    if rtt_stats:
+        print(f"  {DIM}avg {rtt_stats['avg']:.0f}ms "
+              f"(jitter {rtt_stats['jitter']:.0f}ms){RESET}", end="")
 
     if faults:
         # Count faults per zone
@@ -1126,6 +1236,7 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
         "cycle": cycle_num, "runs": total,
         "ok": ok_runs, "fail": fail_runs,
         "faults": faults,
+        "rtt_stats": rtt_stats,
         "hop_reached": dict(hop_reached),
         "hop_failed": dict(hop_failed),
         "failed_runs_detail": failed_runs_detail,
@@ -1149,7 +1260,8 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
             stats["total_incidents"] += 1
             stats["zone_incidents"][worst_zone] += 1
 
-    return {"ok_runs": ok_runs, "fail_runs": fail_runs, "faults": faults}
+    return {"ok_runs": ok_runs, "fail_runs": fail_runs, "faults": faults, "rtt_stats": rtt_stats,
+            "route": [h["host"] for h in route]}
 
 
 # ── Display ───────────────────────────────────────────────────────────────
@@ -1550,6 +1662,10 @@ def _build_dashboard_data(days=30):
             "zone": "?", "reached": 0, "failed": 0, "targets": set()
         })
         timeline = []
+        rtt_all = []       # all rtt_stats from trace_cycles
+        dns_tests = []     # dns_test events
+        speed_tests = []   # speed_test events
+        route_changes = 0
 
         for ev in s["events"]:
             t = ev.get("type")
@@ -1583,11 +1699,23 @@ def _build_dashboard_data(days=30):
                         key = f"{hop_num_str}|{host}"
                         hop_detail[key]["reached"] += cnt
 
+                rtt_s = ev.get("rtt_stats")
+                if rtt_s:
+                    rtt_s["target"] = target_name
+                    rtt_s["ts"] = ev.get("ts", "")
+                    rtt_all.append(rtt_s)
+
                 timeline.append({
                     "ts": ev.get("ts", ""),
                     "ok": ok, "fail": fail,
                     "target": target_name,
                 })
+            elif t == "dns_test":
+                dns_tests.append(ev)
+            elif t == "speed_test":
+                speed_tests.append(ev)
+            elif t == "route_change":
+                route_changes += 1
             elif t == "drop_start":
                 timeline.append({
                     "ts": ev.get("ts", ""), "event": "drop_start",
@@ -1652,6 +1780,10 @@ def _build_dashboard_data(days=30):
             "hops": hops_list,
             "timeline": timeline,
             "failed_runs": failed_runs,
+            "rtt_stats": rtt_all,
+            "dns_tests": dns_tests,
+            "speed_tests": speed_tests,
+            "route_changes": route_changes,
         }
         session_summaries.append(summary)
 
@@ -1785,18 +1917,33 @@ def _build_dashboard_html(data_json, days, live=False):
         live_js = """
 // ── Live auto-refresh ──
 (function() {
-  var POLL_INTERVAL = 5000;
-  var indicator = document.createElement('div');
-  indicator.style.cssText = 'position:fixed;top:8px;right:12px;font-size:0.75em;color:var(--green);z-index:999;font-family:monospace';
-  indicator.innerHTML = '&#9679; LIVE';
-  document.body.appendChild(indicator);
+  var POLL_SEC = 5;
+  var countdown = POLL_SEC;
+  var polling = false;
+
+  var btn = document.createElement('button');
+  btn.style.cssText = 'position:fixed;top:8px;right:12px;font-size:0.75em;z-index:999;font-family:monospace;' +
+    'background:var(--bg3);color:var(--green);border:1px solid var(--green);border-radius:4px;padding:3px 10px;cursor:pointer';
+  btn.innerHTML = '&#9679; LIVE ' + POLL_SEC + 's';
+  btn.title = 'Click to refresh now';
+  btn.onclick = function() { countdown = 0; doRefresh(); };
+  document.body.appendChild(btn);
 
   var lastDataHash = JSON.stringify(DATA);
 
-  async function poll() {
+  function updateBtn(text, color) {
+    btn.style.color = color;
+    btn.style.borderColor = color;
+    btn.innerHTML = text;
+  }
+
+  async function doRefresh() {
+    if (polling) return;
+    polling = true;
+    updateBtn('&#8635; ...', 'var(--yellow)');
     try {
       var resp = await fetch('/data');
-      if (!resp.ok) return;
+      if (!resp.ok) { polling = false; return; }
       var payload = await resp.json();
       var sessions = payload.sessions || payload;
       MONITOR = payload.monitor || {};
@@ -1812,21 +1959,29 @@ def _build_dashboard_html(data_json, days, live=False):
         } else if (DATA.length) {
           selectSession(DATA.length - 1);
         }
-        indicator.innerHTML = '&#9679; LIVE &#8635; ' + new Date().toLocaleTimeString();
       }
       renderStatusBar();
+      countdown = POLL_SEC;
     } catch(e) {
-      indicator.style.color = 'var(--red)';
-      indicator.innerHTML = '&#9679; OFFLINE';
-      setTimeout(function() { indicator.style.color = 'var(--green)'; }, 2000);
+      updateBtn('&#9679; OFFLINE', 'var(--red)');
+      countdown = POLL_SEC;
     }
+    polling = false;
   }
 
-  setInterval(poll, POLL_INTERVAL);
+  setInterval(function() {
+    if (polling) return;
+    countdown--;
+    if (countdown <= 0) {
+      doRefresh();
+    } else {
+      updateBtn('&#9679; LIVE ' + countdown + 's', 'var(--green)');
+    }
+  }, 1000);
 })();
 """
     return f'''<!DOCTYPE html>
-<html lang="pl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1882,7 +2037,7 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
 @media(max-width:900px) {{ .grid-2,.grid-3,.grid-4 {{ grid-template-columns:1fr; }} }}
 .metric {{ text-align: center; padding: 12px; }}
 .metric .num {{ font-size: 1.8em; font-weight: bold; line-height: 1.2; }}
-.metric .lbl {{ font-size: 0.78em; color: var(--fg2); }}
+.metric .lbl {{ font-size: 0.78em; color: var(--fg2); position: relative; }}
 table {{ width: 100%; border-collapse: collapse; font-size: 0.85em; }}
 th {{ text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--border);
   color: var(--fg2); font-weight: 600; }}
@@ -1956,6 +2111,11 @@ tr:hover td {{ background: var(--bg3); }}
 }}
 .toggle-arrow {{ transition: transform 0.2s; display: inline-block; }}
 .toggle-arrow.open {{ transform: rotate(90deg); }}
+.info-wrap {{ display:inline;position:relative; }}
+.info-btn {{ display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--bg3);color:var(--fg2);font-size:9px;font-style:italic;font-weight:700;cursor:pointer;margin-left:3px;border:1px solid var(--fg3);vertical-align:middle;user-select:none; }}
+.info-btn:hover {{ background:var(--fg3);color:var(--fg); }}
+.info-popup {{ display:none;position:absolute;left:50%;transform:translateX(-50%);bottom:calc(100% + 6px);z-index:50;background:#1c2128;border:1px solid var(--fg3);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--fg);max-width:300px;min-width:200px;line-height:1.4;box-shadow:0 4px 16px rgba(0,0,0,0.5);text-align:left;white-space:normal;font-weight:400; }}
+.info-popup.show {{ display:block; }}
 </style>
 </head>
 <body>
@@ -1967,7 +2127,7 @@ tr:hover td {{ background: var(--bg3); }}
 </div>
 
 <div class="main" id="main">
-  <div class="empty">Wybierz sesje z listy po lewej</div>
+  <div class="empty">Select a session from the list</div>
 </div>
 
 </div>
@@ -1986,6 +2146,72 @@ const ZONE_COLORS = {{
 }};
 
 function zc(zone) {{ return ZONE_COLORS[zone] || '#484f58'; }}
+
+// ── Metric info tooltips + ratings ──
+const METRIC_INFO = {{
+  rtt: {{
+    en: 'Round-trip time — how long a packet takes to reach the target and return. Lower is better. High RTT means slow connection.',
+    pl: 'Czas podrozy pakietu do celu i z powrotem. Im nizszy tym lepiej. Wysoki RTT = wolne polaczenie.',
+    rate: (v) => v < 30 ? ['good','var(--green)'] : v < 60 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  jitter: {{
+    en: 'Variation in packet delay between consecutive probes. High jitter causes VoIP/video stuttering. UKE considers >30ms problematic.',
+    pl: 'Zmiennosc opoznienia miedzy kolejnymi probami. Wysoki jitter powoduje zacinanie rozmow/wideo. UKE uznaje >30ms za problem.',
+    rate: (v) => v < 10 ? ['good','var(--green)'] : v < 30 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  dns: {{
+    en: 'Time to resolve a domain name to IP address. Slow DNS causes page load delays. ISP DNS >100ms is considered poor.',
+    pl: 'Czas zamiany nazwy domeny na adres IP. Wolny DNS opoznia ladowanie stron. DNS ISP >100ms to slaby wynik.',
+    rate: (v) => v < 30 ? ['good','var(--green)'] : v < 100 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  download: {{
+    en: 'Download speed measured via 10MB Cloudflare edge transfer. Reflects real-world throughput, not advertised speed.',
+    pl: 'Predkosc pobierania mierzona transferem 10MB z Cloudflare. Odzwierciedla realna przepustowosc, nie deklarowana.',
+    rate: (v) => v > 50 ? ['good','var(--green)'] : v > 10 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  upload: {{
+    en: 'Upload speed measured via 2MB Cloudflare transfer. Important for video calls, file sharing, and cloud backups.',
+    pl: 'Predkosc wysylania mierzona transferem 2MB do Cloudflare. Wazna dla wideorozmow, udostepniania plikow i backupow.',
+    rate: (v) => v > 20 ? ['good','var(--green)'] : v > 5 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  route_changes: {{
+    en: 'Number of times the network path to the target changed during monitoring. Frequent changes indicate ISP routing instability.',
+    pl: 'Ile razy trasa do celu zmienila sie podczas monitorowania. Czeste zmiany = niestabilny routing ISP.',
+    rate: (v) => v === 0 ? ['good','var(--green)'] : v <= 3 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  tcp: {{
+    en: 'TCP handshake time — the delay to establish a connection. High values suggest network congestion or ISP throttling.',
+    pl: 'Czas nawiazania polaczenia TCP. Wysokie wartosci sugeruja przeciazenie sieci lub throttling ISP.',
+    rate: (v) => v < 50 ? ['good','var(--green)'] : v < 150 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  tls: {{
+    en: 'TLS handshake time — encryption setup delay. Depends on server distance and network latency.',
+    pl: 'Czas nawiazania szyfrowania TLS. Zalezy od odleglosci serwera i opoznienia sieci.',
+    rate: (v) => v < 100 ? ['good','var(--green)'] : v < 200 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  ttfb: {{
+    en: 'Time to First Byte — delay from request sent to first byte received. Includes server processing time.',
+    pl: 'Czas do pierwszego bajtu — od wyslania zapytania do otrzymania odpowiedzi. Obejmuje czas przetwarzania serwera.',
+    rate: (v) => v < 100 ? ['good','var(--green)'] : v < 300 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+}};
+
+var _infoLang = (navigator.language || 'en').startsWith('pl') ? 'pl' : 'en';
+
+function infoTip(key) {{
+  const m = METRIC_INFO[key];
+  if (!m) return '';
+  const txt = m[_infoLang] || m.en;
+  return `<span class="info-wrap"><span class="info-btn" onclick="event.stopPropagation();document.querySelectorAll('.info-popup.show').forEach(p=>p.classList.remove('show'));this.nextElementSibling.classList.toggle('show')">i</span><span class="info-popup">${{txt}}</span></span>`;
+}}
+
+function ratingBadge(key, value) {{
+  const m = METRIC_INFO[key];
+  if (!m || value == null || value === '-') return '';
+  const [label, color] = m.rate(parseFloat(value));
+  const labels = {{ good: _infoLang==='pl'?'OK':'good', ok: _infoLang==='pl'?'sredni':'fair', bad: _infoLang==='pl'?'zly':'poor' }};
+  return `<span style="display:inline-block;font-size:0.7em;padding:1px 6px;border-radius:3px;margin-left:4px;background:${{color}};color:#000;font-weight:600">${{labels[label] || label}}</span>`;
+}}
 
 // ── Pie chart (canvas) ──
 function drawPie(canvasId, slices) {{
@@ -2063,7 +2289,7 @@ function renderSession(s) {{
 
   main.innerHTML = `
     <div class="card">
-      <h2>Sesja: ${{s.start || s.name}}</h2>
+      <h2>Session: ${{s.start || s.name}}</h2>
       <div class="conn-grid">
         <div class="conn-cell"><div class="cl">Interface</div><div class="cv">${{s.interface}} (${{s.interface_type}})</div></div>
         <div class="conn-cell"><div class="cl">IP</div><div class="cv">${{s.ip}}</div></div>
@@ -2079,12 +2305,14 @@ function renderSession(s) {{
 
     <div class="card">
       <div class="grid grid-4">
-        <div class="metric"><div class="num">${{s.total_runs}}</div><div class="lbl">prob lacznie</div></div>
+        <div class="metric"><div class="num">${{s.total_runs}}</div><div class="lbl">total runs</div></div>
         <div class="metric"><div class="num" style="color:var(--green)">${{s.ok_runs}}</div><div class="lbl">OK</div></div>
         <div class="metric"><div class="num" style="color:var(--red)">${{s.fail_runs}}</div><div class="lbl">FAIL</div></div>
         <div class="metric"><div class="num" style="color:${{s.success_pct>=95?'var(--green)':s.success_pct>=80?'var(--yellow)':'var(--red)'}}">${{s.success_pct}}%</div><div class="lbl">success rate</div></div>
       </div>
     </div>
+
+    ${{renderStabilityCards(s)}}
 
     <div class="card">
       <h2>Timeline</h2>
@@ -2092,17 +2320,17 @@ function renderSession(s) {{
     </div>
 
     <div class="card">
-      <h2>Analiza bledow</h2>
+      <h2>Fault Analysis</h2>
       <div class="grid grid-2">
         <div>
-          <h2 style="margin-top:0">Bledy per strefa</h2>
+          <h2 style="margin-top:0">Faults by Zone</h2>
           <div class="pie-row">
             <canvas id="${{pieId1}}" width="140" height="140"></canvas>
             <div class="pie-legend" id="legend-${{pieId1}}"></div>
           </div>
         </div>
         <div>
-          <h2 style="margin-top:0">Bledy per hop (IP)</h2>
+          <h2 style="margin-top:0">Faults by Hop (IP)</h2>
           <div class="pie-row">
             <canvas id="${{pieId2}}" width="140" height="140"></canvas>
             <div class="pie-legend" id="legend-${{pieId2}}"></div>
@@ -2112,24 +2340,24 @@ function renderSession(s) {{
     </div>
 
     <div class="card">
-      <h2>Awarie per hop / IP</h2>
-      ${{failHops.length ? renderHopTable(s.hops, s.total_runs) : '<div style="color:var(--green)">Brak awarii</div>'}}
+      <h2>Failures by Hop / IP</h2>
+      ${{failHops.length ? renderHopTable(s.hops, s.total_runs) : '<div style="color:var(--green)">No failures</div>'}}
     </div>
 
     ${{s.rssi_history && s.rssi_history.length > 1 ? `<div class="card">
-      <h2>WiFi Signal (RSSI) w czasie</h2>
+      <h2>WiFi Signal (RSSI) over time</h2>
       ${{renderRssiChart(s.rssi_history)}}
     </div>` : ''}}
 
     ${{s.drops.length ? `<div class="card">
-      <h2>Przerwy w lacznosci (${{s.drops.length}})</h2>
+      <h2>Connectivity Drops (${{s.drops.length}})</h2>
       ${{renderDrops(s.drops)}}
     </div>` : ''}}
 
     ${{(s.failed_runs && s.failed_runs.length) ? `<div class="card">
-      <h2>Sfailowane runy — dowody (${{s.failed_runs.length}})</h2>
+      <h2>Failed Runs — Evidence (${{s.failed_runs.length}})</h2>
       <div style="font-size:0.82em;color:var(--fg2);margin-bottom:10px">
-        Kazdy wpis zawiera surowe logi z pinga per hop. Kliknij aby rozwinac.
+        Each entry contains raw ping logs per hop. Click to expand.
       </div>
       ${{renderFailedRuns(s.failed_runs)}}
     </div>` : ''}}
@@ -2174,7 +2402,7 @@ function renderSession(s) {{
 }}
 
 function renderTimeline(timeline) {{
-  if (!timeline || !timeline.length) return '<div style="color:var(--fg3)">Brak danych</div>';
+  if (!timeline || !timeline.length) return '<div style="color:var(--fg3)">No data</div>';
   let html = '<div class="timeline">';
   timeline.forEach(t => {{
     if (t.event === 'drop_start') {{
@@ -2198,7 +2426,7 @@ function renderTimeline(timeline) {{
 }}
 
 function renderHopTable(hops, totalRuns) {{
-  let html = '<table><tr><th>Hop</th><th>IP</th><th>Strefa</th><th>Awarie</th><th>Targets</th><th>% bledow</th><th></th></tr>';
+  let html = '<table><tr><th>Hop</th><th>IP</th><th>Zone</th><th>Failures</th><th>Targets</th><th>Fail %</th><th></th></tr>';
   hops.filter(h => h.failed > 0).sort((a,b) => b.failed - a.failed).forEach(h => {{
     const total = h.reached + h.failed;
     const pct = total > 0 ? (h.failed/total*100).toFixed(1) : '0';
@@ -2221,7 +2449,7 @@ function renderHopTable(hops, totalRuns) {{
 }}
 
 function renderDrops(drops) {{
-  let html = '<table><tr><th>Czas</th><th>Czas trwania</th><th>Strefa</th></tr>';
+  let html = '<table><tr><th>Time</th><th>Duration</th><th>Zone</th></tr>';
   drops.forEach(d => {{
     html += `<tr><td>${{d.ts||''}}</td><td style="font-weight:600;color:var(--red)">${{d.duration||0}}s</td>
       <td style="color:${{zc(d.zone)}}">${{d.zone||'?'}}</td></tr>`;
@@ -2241,7 +2469,7 @@ function renderRssiChart(history) {{
   const mx = Math.max(...vals);
 
   let html = `<div style="font-size:0.82em;color:var(--fg2);margin-bottom:4px">` +
-    `Min: <b>${{mn}}</b> dBm | Max: <b>${{mx}}</b> dBm | Avg: <b>${{avg}}</b> dBm | Punktow: ${{vals.length}}</div>`;
+    `Min: <b>${{mn}}</b> dBm | Max: <b>${{mx}}</b> dBm | Avg: <b>${{avg}}</b> dBm | Samples: ${{vals.length}}</div>`;
   html += '<div class="rssi-chart">';
   history.forEach(h => {{
     const pct = Math.max(10, ((h.rssi - minR + 5) / (range + 10)) * 100);
@@ -2293,7 +2521,7 @@ function renderFailedRuns(runs) {{
     html += '</div>';
 
     // Show raw logs per hop
-    html += '<div style="font-size:0.82em;color:var(--fg2);margin-bottom:4px">Surowe logi ping per hop:</div>';
+    html += '<div style="font-size:0.82em;color:var(--fg2);margin-bottom:4px">Raw ping logs per hop:</div>';
     (r.hops_log || []).forEach(h => {{
       if (h.status !== 'skipped' && h.raw) {{
         const statusColor = h.status === 'timeout' ? 'var(--red)' : 'var(--green)';
@@ -2314,6 +2542,95 @@ function escHtml(s) {{
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }}
 
+// ── Stability metrics cards ──
+function renderStabilityCards(s) {{
+  let html = '';
+
+  // RTT / Jitter card
+  const rtt = s.rtt_stats || [];
+  if (rtt.length) {{
+    const avgJitter = (rtt.reduce((a,r) => a + (r.jitter||0), 0) / rtt.length).toFixed(1);
+    const avgRtt = (rtt.reduce((a,r) => a + (r.avg||0), 0) / rtt.length).toFixed(1);
+    const maxJitter = Math.max(...rtt.map(r => r.jitter||0)).toFixed(1);
+    const avgJColor = avgJitter > 30 ? 'var(--red)' : avgJitter > 15 ? 'var(--yellow)' : 'var(--green)';
+    const maxJColor = maxJitter > 30 ? 'var(--red)' : maxJitter > 15 ? 'var(--yellow)' : 'var(--green)';
+    html += `<div class="card">
+      <h2>Latency &amp; Jitter</h2>
+      <div class="grid grid-4">
+        <div class="metric"><div class="num">${{avgRtt}}${{ratingBadge('rtt', avgRtt)}}</div><div class="lbl">avg RTT (ms) ${{infoTip('rtt')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{avgJColor}}">${{avgJitter}}${{ratingBadge('jitter', avgJitter)}}</div><div class="lbl">avg jitter (ms) ${{infoTip('jitter')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{maxJColor}}">${{maxJitter}}</div><div class="lbl">max jitter (ms)</div></div>
+        <div class="metric"><div class="num">${{rtt.length}}</div><div class="lbl">samples</div></div>
+      </div>
+      <div style="margin-top:10px;font-size:0.82em">
+        <table><tr><th>Time</th><th>Target</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>StdDev</th></tr>
+        ${{rtt.slice(-20).map(r => {{
+          const jc = (r.jitter||0) > 30 ? 'color:var(--red)' : (r.jitter||0) > 15 ? 'color:var(--yellow)' : '';
+          const time = r.ts ? r.ts.split('T')[1]?.substring(0,8) || '' : '';
+          return '<tr><td>' + time + '</td><td>' + (r.target||'') + '</td><td>' + (r.min||0) + '</td><td>' + (r.avg||0) + '</td><td>' + (r.max||0) + '</td><td style="' + jc + '"><b>' + (r.jitter||0) + '</b></td><td>' + (r.stddev||0) + '</td></tr>';
+        }}).join('')}}
+        </table>
+      </div>
+    </div>`;
+  }}
+
+  // DNS card
+  const dns = s.dns_tests || [];
+  if (dns.length) {{
+    const lastDns = dns[dns.length - 1];
+    const results = lastDns.results || [];
+    const avgAll = dns.filter(d => d.avg_ms != null).map(d => d.avg_ms);
+    const overallAvg = avgAll.length ? (avgAll.reduce((a,b) => a+b, 0) / avgAll.length).toFixed(1) : '-';
+    const maxDns = avgAll.length ? Math.max(...avgAll).toFixed(1) : '-';
+    const dnsColor = avgAll.length ? (maxDns > 100 ? 'var(--red)' : maxDns > 50 ? 'var(--yellow)' : 'var(--green)') : 'var(--fg2)';
+    html += `<div class="card">
+      <h2>DNS Resolution</h2>
+      <div class="grid grid-3">
+        <div class="metric"><div class="num" style="color:${{dnsColor}}">${{overallAvg}}${{ratingBadge('dns', overallAvg)}}</div><div class="lbl">avg DNS (ms) ${{infoTip('dns')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{dnsColor}}">${{maxDns}}</div><div class="lbl">max avg (ms)</div></div>
+        <div class="metric"><div class="num">${{dns.length}}</div><div class="lbl">tests</div></div>
+      </div>
+      <div style="margin-top:10px;font-size:0.82em">
+        <table><tr><th>Domain</th><th>Last (ms)</th><th>Status</th></tr>
+        ${{results.map(r => '<tr><td>' + r.domain + '</td><td>' + r.time_ms + '</td><td style="color:' + (r.ok ? 'var(--green)' : 'var(--red)') + '">' + (r.ok ? 'OK' : 'FAIL') + '</td></tr>').join('')}}
+        </table>
+      </div>
+    </div>`;
+  }}
+
+  // Speed + Route changes card
+  const speed = s.speed_tests || [];
+  const dl = speed.filter(t => t.test_name && t.test_name.includes('10MB'));
+  const ul = speed.filter(t => t.test_name && t.test_name.includes('upload'));
+  if (dl.length || ul.length || s.route_changes) {{
+    const lastDl = dl.length ? dl[dl.length - 1] : null;
+    const lastUl = ul.length ? ul[ul.length - 1] : null;
+    const rcColor = s.route_changes > 5 ? 'var(--red)' : s.route_changes > 0 ? 'var(--yellow)' : 'var(--green)';
+    const dlSpeed = lastDl ? lastDl.speed_mbps : null;
+    const ulSpeed = lastUl ? lastUl.speed_mbps : null;
+    html += `<div class="card">
+      <h2>Speed &amp; Routing</h2>
+      <div class="grid grid-4">
+        <div class="metric"><div class="num">${{dlSpeed || '-'}}${{ratingBadge('download', dlSpeed)}}</div><div class="lbl">download (Mbps) ${{infoTip('download')}}</div></div>
+        <div class="metric"><div class="num">${{ulSpeed || '-'}}${{ratingBadge('upload', ulSpeed)}}</div><div class="lbl">upload (Mbps) ${{infoTip('upload')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{rcColor}}">${{s.route_changes || 0}}${{ratingBadge('route_changes', s.route_changes || 0)}}</div><div class="lbl">route changes ${{infoTip('route_changes')}}</div></div>
+        <div class="metric"><div class="num">${{dl.length + ul.length}}</div><div class="lbl">speed tests</div></div>
+      </div>`;
+    if (lastDl && lastDl.dns_ms != null) {{
+      html += `<div style="margin-top:10px;font-size:0.82em">
+        <b>TCP Timing (last):</b>
+        DNS ${{lastDl.dns_ms}}ms ${{ratingBadge('dns', lastDl.dns_ms)}} |
+        TCP ${{lastDl.connect_ms}}ms ${{ratingBadge('tcp', lastDl.connect_ms)}} ${{infoTip('tcp')}} |
+        TLS ${{lastDl.tls_ms}}ms ${{ratingBadge('tls', lastDl.tls_ms)}} ${{infoTip('tls')}} |
+        TTFB ${{lastDl.ttfb_ms}}ms ${{ratingBadge('ttfb', lastDl.ttfb_ms)}} ${{infoTip('ttfb')}}
+      </div>`;
+    }}
+    html += '</div>';
+  }}
+
+  return html;
+}}
+
 // ── Monitor status bar ──
 function renderStatusBar() {{
   var bar = document.getElementById('status-bar');
@@ -2322,17 +2639,24 @@ function renderStatusBar() {{
     bar.style.display = 'block';
     bar.style.background = '#0d1117';
     bar.style.color = '#3fb950';
-    bar.innerHTML = '\u25cf Monitoring aktywny &mdash; PID ' + MONITOR.pid
-      + (MONITOR.session ? ' | sesja: ' + MONITOR.session : '');
+    bar.innerHTML = '\u25cf Monitoring active &mdash; PID ' + MONITOR.pid
+      + (MONITOR.session ? ' | session: ' + MONITOR.session : '');
   }} else if (Object.keys(MONITOR).length) {{
     bar.style.display = 'block';
     bar.style.background = '#0d1117';
     bar.style.color = '#d29922';
-    bar.innerHTML = '\u25cb Monitoring nieaktywny';
+    bar.innerHTML = '\u25cb Monitoring inactive';
   }} else {{
     bar.style.display = 'none';
   }}
 }}
+
+// ── Close info popups on click outside ──
+document.addEventListener('click', function(e) {{
+  if (!e.target.classList.contains('info-btn')) {{
+    document.querySelectorAll('.info-popup.show').forEach(p => p.classList.remove('show'));
+  }}
+}});
 
 // ── Init ──
 renderSidebar();
@@ -2387,6 +2711,9 @@ def monitor():
     cycle = 0
     last_speed_test = 0
     session_start = time.time()
+
+    previous_routes = {}  # target -> list of hop IPs (for route stability)
+    route_changes = 0
 
     drop_state = {
         "in_drop": False,
@@ -2466,6 +2793,21 @@ def monitor():
                 if shutdown_requested:
                     break
                 result = run_trace_cycle(name, target, cycle, stats, is_shutdown)
+
+                # Route stability check
+                new_route = result.get("route", [])
+                if new_route and name in previous_routes:
+                    old_route = previous_routes[name]
+                    if new_route != old_route:
+                        route_changes += 1
+                        log_event("route_change", {
+                            "target_name": name, "target": target,
+                            "cycle": cycle,
+                            "old_route": old_route, "new_route": new_route,
+                        })
+                        print(f"  {YELLOW}Route change to {name}!{RESET}")
+                if new_route:
+                    previous_routes[name] = new_route
                 cycle_ok += result["ok_runs"]
                 cycle_fail += result["fail_runs"]
                 cycle_faults.extend(result["faults"])
@@ -2474,6 +2816,25 @@ def monitor():
 
             if shutdown_requested:
                 break
+
+            # --- DNS resolution test ---
+            dns_results = test_dns_resolution()
+            if dns_results:
+                dns_ok = [r for r in dns_results if r["ok"]]
+                avg_dns = sum(r["time_ms"] for r in dns_ok) / len(dns_ok) if dns_ok else None
+                log_event("dns_test", {
+                    "cycle": cycle, "results": dns_results,
+                    "avg_ms": round(avg_dns, 1) if avg_dns is not None else None,
+                })
+                if dns_ok:
+                    dns_max = max(r["time_ms"] for r in dns_ok)
+                    color = RED if dns_max > 100 else (YELLOW if dns_max > 50 else GREEN)
+                    print(f"  {color}DNS: avg {avg_dns:.0f}ms, max {dns_max:.0f}ms{RESET}", end="")
+                    if dns_max > 100:
+                        print(f"  {RED}(slow!){RESET}", end="")
+                    print()
+                else:
+                    print(f"  {RED}DNS: all lookups failed{RESET}")
 
             # --- Quick ping targets (batch) ---
             ping_ok = 0
@@ -2577,8 +2938,28 @@ def monitor():
                     csv_append(SPEED_LOG, [
                         ts, speed["test_name"], speed["speed_mbps"],
                         speed["time_seconds"], speed["http_code"],
+                        speed.get("dns_ms", ""), speed.get("connect_ms", ""),
+                        speed.get("tls_ms", ""), speed.get("ttfb_ms", ""),
                     ])
                     log_event("speed_test", speed)
+                    print(f"  {DIM}Download: {speed['speed_mbps']} Mbps{RESET}", end="")
+                    if speed.get("dns_ms"):
+                        print(f"  {DIM}| DNS {speed['dns_ms']:.0f}ms "
+                              f"| TCP {speed['connect_ms']:.0f}ms "
+                              f"| TLS {speed['tls_ms']:.0f}ms "
+                              f"| TTFB {speed['ttfb_ms']:.0f}ms{RESET}", end="")
+                    print()
+
+                upload = estimate_upload_speed()
+                if upload:
+                    csv_append(SPEED_LOG, [
+                        ts, upload["test_name"], upload["speed_mbps"],
+                        upload["time_seconds"], upload["http_code"],
+                        "", "", "", "",
+                    ])
+                    log_event("speed_test", upload)
+                    print(f"  {DIM}Upload: {upload['speed_mbps']} Mbps{RESET}")
+
                 last_speed_test = now_t
 
             # --- Periodic stats ---
@@ -2627,6 +3008,7 @@ def monitor():
         "drops": stats["total_drops"],
         "downtime_seconds": round(drop_time, 1),
         "uptime_pct": round(uptime, 1),
+        "route_changes": route_changes,
     })
 
     print_session_summary(cycle, elapsed, stats, drop_time, uptime)
