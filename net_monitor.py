@@ -2556,7 +2556,7 @@ function renderSession(s) {{
         const total = zones.reduce((a,x) => a+x[1], 0);
         leg.innerHTML = zones.map(([z,c]) =>
           `<div><span class="pie-dot" style="background:${{zc(z)}}"></span>
-          ${{z}}: ${{c}} (${{(c/total*100).toFixed(0)}}%)</div>`
+          ${{escHtml(z)}}: ${{c}} (${{(c/total*100).toFixed(0)}}%)</div>`
         ).join('');
       }}
     }}
@@ -2575,7 +2575,7 @@ function renderSession(s) {{
       if (leg2) {{
         leg2.innerHTML = hopSlices.map(sl =>
           `<div><span class="pie-dot" style="background:${{sl.color}}"></span>
-          ${{sl.label}}: ${{sl.value}}</div>`
+          ${{escHtml(sl.label)}}: ${{sl.value}}</div>`
         ).join('');
       }}
     }}
@@ -2707,7 +2707,7 @@ function renderFailedRuns(runs) {{
       if (h.status !== 'skipped' && h.raw) {{
         const statusColor = h.status === 'timeout' ? 'var(--red)' : 'var(--green)';
         html += `<div style="margin:2px 0;font-size:0.85em">
-          <b style="color:${{statusColor}}">TTL ${{h.ttl}}</b> (${{h.hop}}) — ${{h.status}}
+          <b style="color:${{statusColor}}">TTL ${{h.ttl}}</b> (${{escHtml(h.hop)}}) — ${{h.status}}
         </div>
         <div class="raw-log">${{escHtml(h.raw)}}</div>`;
       }}
@@ -2749,7 +2749,7 @@ function renderStabilityCards(s) {{
         ${{rtt.slice(-20).map(r => {{
           const jc = (r.jitter||0) > 30 ? 'color:var(--red)' : (r.jitter||0) > 15 ? 'color:var(--yellow)' : '';
           const time = r.ts ? r.ts.split('T')[1]?.substring(0,8) || '' : '';
-          return '<tr><td>' + time + '</td><td>' + (r.target||'') + '</td><td>' + (r.min||0) + '</td><td>' + (r.avg||0) + '</td><td>' + (r.max||0) + '</td><td style="' + jc + '"><b>' + (r.jitter||0) + '</b></td><td>' + (r.stddev||0) + '</td></tr>';
+          return '<tr><td>' + time + '</td><td>' + escHtml(r.target||'') + '</td><td>' + (r.min||0) + '</td><td>' + (r.avg||0) + '</td><td>' + (r.max||0) + '</td><td style="' + jc + '"><b>' + (r.jitter||0) + '</b></td><td>' + (r.stddev||0) + '</td></tr>';
         }}).join('')}}
         </table>
       </div>
@@ -2774,7 +2774,7 @@ function renderStabilityCards(s) {{
       </div>
       <div style="margin-top:10px;font-size:0.82em">
         <table><tr><th>${{t('domain')}}</th><th>${{t('last_ms')}}</th><th>${{t('status')}}</th></tr>
-        ${{results.map(r => '<tr><td>' + r.domain + '</td><td>' + r.time_ms + '</td><td style="color:' + (r.ok ? 'var(--green)' : 'var(--red)') + '">' + (r.ok ? 'OK' : 'FAIL') + '</td></tr>').join('')}}
+        ${{results.map(r => '<tr><td>' + escHtml(r.domain) + '</td><td>' + r.time_ms + '</td><td style="color:' + (r.ok ? 'var(--green)' : 'var(--red)') + '">' + (r.ok ? 'OK' : 'FAIL') + '</td></tr>').join('')}}
         </table>
       </div>
     </div>`;
