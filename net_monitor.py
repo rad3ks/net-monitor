@@ -768,7 +768,8 @@ def log_event(event_type, data):
 
 
 def update_live_status(cycle, target_name, run_num, total_runs, result,
-                       ok_runs, fail_runs, faults=None, rtt_samples=None):
+                       ok_runs, fail_runs, faults=None, rtt_samples=None,
+                       failed_runs_detail=None):
     """Write ephemeral live status file for dashboard real-time progress.
     Uses atomic rename to prevent partial reads."""
     rtt_stats = {}
@@ -788,6 +789,7 @@ def update_live_status(cycle, target_name, run_num, total_runs, result,
         "fail": fail_runs,
         "faults": faults or [],
         "rtt_stats": rtt_stats,
+        "failed_runs_detail": failed_runs_detail or [],
     }
     try:
         tmp = LIVE_STATUS.with_suffix(".tmp")
@@ -1193,7 +1195,8 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
 
         update_live_status(cycle_num, target_name, run_num, RUNS_PER_TARGET,
                            run_result or "?", ok_runs, fail_runs,
-                           faults=faults, rtt_samples=rtt_samples)
+                           faults=faults, rtt_samples=rtt_samples,
+                           failed_runs_detail=failed_runs_detail)
 
         # Pause between runs
         if run_idx < RUNS_PER_TARGET - 1 and not shutdown_check():
@@ -1871,6 +1874,9 @@ def _build_dashboard_data(days=30):
                     "target": live.get("target", "?"),
                     "ts": live.get("ts", ""),
                 })
+            # Add failed run evidence
+            for frd in live.get("failed_runs_detail", []):
+                last["failed_runs"].append(frd)
 
     return session_summaries
 
