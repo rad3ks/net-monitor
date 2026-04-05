@@ -1685,16 +1685,35 @@ def live_dashboard(days=30, port=8077):
     from http.server import HTTPServer, BaseHTTPRequestHandler
     ensure_dirs()
 
+    last_summary = {"sessions": 0, "runs": 0, "fails": 0}
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path == "/data":
                 data = _build_dashboard_data(days)
-                payload = json.dumps(data or [], default=str)
+                sessions = data or []
+                payload = json.dumps(sessions, default=str)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(payload.encode())
+
+                # Log summary to CLI
+                total_runs = sum(s.get("total_runs", 0) for s in sessions)
+                total_fails = sum(s.get("fail_runs", 0) for s in sessions)
+                if (len(sessions) != last_summary["sessions"] or
+                        total_runs != last_summary["runs"] or
+                        total_fails != last_summary["fails"]):
+                    last_summary["sessions"] = len(sessions)
+                    last_summary["runs"] = total_runs
+                    last_summary["fails"] = total_fails
+                    fail_color = RED if total_fails > 0 else GREEN
+                    print(f"{DIM}[{ts_short()}]{RESET} "
+                          f"Sesje: {len(sessions)} | "
+                          f"Runs: {total_runs} | "
+                          f"Fail: {fail_color}{total_fails}{RESET}")
+
             elif self.path == "/" or self.path == "/index.html":
                 data = _build_dashboard_data(days)
                 data_json = json.dumps(data or [], indent=2, default=str)
@@ -1703,11 +1722,12 @@ def live_dashboard(days=30, port=8077):
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(html.encode())
+                print(f"{DIM}[{ts_short()}]{RESET} Dashboard served")
             else:
                 self.send_error(404)
 
         def log_message(self, format, *args):
-            pass  # suppress request logs
+            pass  # suppress default HTTP logs
 
     url = f"http://localhost:{port}"
     print(f"\n{BOLD}Net Monitor — Live Dashboard{RESET}")
