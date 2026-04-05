@@ -1883,15 +1883,13 @@ def _build_dashboard_html(data_json, days, live=False):
   var countdown = POLL_SEC;
   var polling = false;
 
-  var btn = document.createElement('button');
-  btn.style.cssText = 'position:fixed;top:8px;right:12px;font-size:0.75em;z-index:999;font-family:monospace;' +
-    'background:var(--bg3);color:var(--green);border:1px solid var(--green);border-radius:4px;padding:3px 10px;cursor:pointer';
-  btn.innerHTML = '&#9679; LIVE ' + POLL_SEC + 's';
-  btn.title = 'Click to refresh now';
+  var btn = document.getElementById('live-btn');
+  if (!btn) return;
   btn.onclick = function() { countdown = 0; doRefresh(); };
-  document.body.appendChild(btn);
 
   var lastDataHash = JSON.stringify(DATA);
+
+  btn.style.display = 'inline-block';
 
   function updateBtn(text, color) {
     btn.style.color = color;
@@ -1902,7 +1900,7 @@ def _build_dashboard_html(data_json, days, live=False):
   async function doRefresh() {
     if (polling) return;
     polling = true;
-    updateBtn('&#8635; ...', 'var(--yellow)');
+    updateBtn('&#8635; refreshing...', 'var(--yellow)');
     try {
       var resp = await fetch('/data');
       if (!resp.ok) { polling = false; return; }
@@ -2079,7 +2077,11 @@ tr:hover td {{ background: var(--bg3); }}
 <div class="layout">
 
 <div class="sidebar" id="sidebar">
-  <h1>Net Monitor <button id="lang-btn" onclick="toggleLang()" style="float:right;font-size:0.5em;background:var(--bg3);color:var(--fg2);border:1px solid var(--fg3);border-radius:3px;padding:2px 6px;cursor:pointer"></button></h1>
+  <h1>Net Monitor</h1>
+  <div style="display:flex;gap:6px;margin:-8px 0 10px 0">
+    <button id="lang-btn" onclick="toggleLang()" style="font-size:0.7em;background:var(--bg3);color:var(--fg2);border:1px solid var(--fg3);border-radius:3px;padding:2px 8px;cursor:pointer"></button>
+    <button id="live-btn" title="Click to refresh" style="font-size:0.7em;background:var(--bg3);color:var(--green);border:1px solid var(--green);border-radius:3px;padding:2px 8px;cursor:pointer;display:none">&#9679; LIVE</button>
+  </div>
   <div id="session-list"></div>
 </div>
 
