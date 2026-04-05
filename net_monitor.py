@@ -2186,7 +2186,7 @@ const I18N = {{
     fault_analysis: 'Analiza b\u0142\u0119d\u00f3w', faults_by_zone: 'B\u0142\u0119dy per strefa',
     faults_by_hop: 'B\u0142\u0119dy per hop (IP)', failures_by_hop: 'Awarie per hop / IP',
     no_failures: 'Brak awarii', wifi_over_time: 'WiFi Signal (RSSI) w czasie',
-    drops: 'Przerwy w \u0142\u0105czno\u015bci', failed_evidence: 'Sfailowane runy \u2014 dowody',
+    drops: 'Przerwy w \u0142\u0105czno\u015bci', failed_evidence: 'Nieudane pr\u00f3by \u2014 dowody',
     evidence_hint: 'Ka\u017cdy wpis zawiera surowe logi z pinga per hop. Kliknij aby rozwina\u0107.',
     no_data: 'Brak danych', hop: 'Hop', zone: 'Strefa', failures: 'Awarie',
     fail_pct: '% b\u0142\u0119d\u00f3w', time: 'Czas', duration: 'Czas trwania',
@@ -2230,57 +2230,57 @@ function zc(zone) {{ return ZONE_COLORS[zone] || '#484f58'; }}
 const METRIC_INFO = {{
   rtt: {{
     en: 'Round-trip time — how long a packet takes to reach the target and return. Lower is better. High RTT means slow connection.',
-    pl: 'Czas podrozy pakietu do celu i z powrotem. Im nizszy tym lepiej. Wysoki RTT = wolne polaczenie.',
+    pl: 'Czas podr\u00f3\u017cy pakietu do celu i z powrotem. Im ni\u017cszy tym lepiej. Wysoki RTT = wolne po\u0142\u0105czenie.',
     rate: (v) => v < 30 ? ['good','var(--green)'] : v < 60 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
   }},
   jitter: {{
     en: 'Variation in packet delay between consecutive probes. High jitter causes VoIP/video stuttering. UKE considers >30ms problematic.',
-    pl: 'Zmiennosc opoznienia miedzy kolejnymi probami. Wysoki jitter powoduje zacinanie rozmow/wideo. UKE uznaje >30ms za problem.',
+    pl: 'Zmienno\u015b\u0107 op\u00f3\u017anienia mi\u0119dzy kolejnymi pr\u00f3bami. Wysoki jitter powoduje zacinanie rozm\u00f3w/wideo. UKE uznaje >30ms za problem.',
     rate: (v) => v < 10 ? ['good','var(--green)'] : v < 30 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
   }},
   dns: {{
     en: 'Time to resolve a domain name to IP address. Slow DNS causes page load delays. ISP DNS >100ms is considered poor.',
-    pl: 'Czas zamiany nazwy domeny na adres IP. Wolny DNS opoznia ladowanie stron. DNS ISP >100ms to slaby wynik.',
+    pl: 'Czas zamiany nazwy domeny na adres IP. Wolny DNS op\u00f3\u017ania \u0142adowanie stron. DNS ISP >100ms to s\u0142aby wynik.',
     rate: (v) => v < 30 ? ['good','var(--green)'] : v < 100 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
   }},
   download: {{
     en: 'Download speed measured via 10MB Cloudflare edge transfer. Reflects real-world throughput, not advertised speed.',
-    pl: 'Predkosc pobierania mierzona transferem 10MB z Cloudflare. Odzwierciedla realna przepustowosc, nie deklarowana.',
+    pl: 'Pr\u0119dko\u015b\u0107 pobierania mierzona transferem 10MB z Cloudflare. Odzwierciedla realn\u0105 przepustowo\u015b\u0107, nie deklarowan\u0105.',
     rate: (v) => v > 50 ? ['good','var(--green)'] : v > 10 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
   }},
   upload: {{
     en: 'Upload speed measured via 2MB Cloudflare transfer. Important for video calls, file sharing, and cloud backups.',
-    pl: 'Predkosc wysylania mierzona transferem 2MB do Cloudflare. Wazna dla wideorozmow, udostepniania plikow i backupow.',
+    pl: 'Pr\u0119dko\u015b\u0107 wysy\u0142ania mierzona transferem 2MB do Cloudflare. Wa\u017cna dla wideorozm\u00f3w, udost\u0119pniania plik\u00f3w i backup\u00f3w.',
     rate: (v) => v > 20 ? ['good','var(--green)'] : v > 5 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
   }},
   route_changes: {{
     en: 'Number of times the network path to the target changed during monitoring. Frequent changes indicate ISP routing instability.',
-    pl: 'Ile razy trasa do celu zmienila sie podczas monitorowania. Czeste zmiany = niestabilny routing ISP.',
+    pl: 'Ile razy trasa do celu zmieni\u0142a si\u0119 podczas monitorowania. Cz\u0119ste zmiany = niestabilny routing ISP.',
     rate: (v) => v === 0 ? ['good','var(--green)'] : v <= 3 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
   }},
   tcp: {{
     en: 'TCP handshake time — the delay to establish a connection. High values suggest network congestion or ISP throttling.',
-    pl: 'Czas nawiazania polaczenia TCP. Wysokie wartosci sugeruja przeciazenie sieci lub throttling ISP.',
+    pl: 'Czas nawi\u0105zania po\u0142\u0105czenia TCP. Wysokie warto\u015bci sugeruj\u0105 przeci\u0105\u017cenie sieci lub throttling ISP.',
     rate: (v) => v < 50 ? ['good','var(--green)'] : v < 150 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
   }},
   tls: {{
     en: 'TLS handshake time — encryption setup delay. Depends on server distance and network latency.',
-    pl: 'Czas nawiazania szyfrowania TLS. Zalezy od odleglosci serwera i opoznienia sieci.',
+    pl: 'Czas nawi\u0105zania szyfrowania TLS. Zale\u017cy od odleg\u0142o\u015bci serwera i op\u00f3\u017anienia sieci.',
     rate: (v) => v < 100 ? ['good','var(--green)'] : v < 200 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
   }},
   ttfb: {{
     en: 'Time to First Byte — delay from request sent to first byte received. Includes server processing time.',
-    pl: 'Czas do pierwszego bajtu — od wyslania zapytania do otrzymania odpowiedzi. Obejmuje czas przetwarzania serwera.',
+    pl: 'Czas do pierwszego bajtu \u2014 od wys\u0142ania zapytania do otrzymania odpowiedzi. Obejmuje czas przetwarzania serwera.',
     rate: (v) => v < 100 ? ['good','var(--green)'] : v < 300 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
   }},
 }};
 
-var _infoLang = (navigator.language || 'en').startsWith('pl') ? 'pl' : 'en';
+// _infoLang removed — uses LANG directly for live toggle support
 
 function infoTip(key) {{
   const m = METRIC_INFO[key];
   if (!m) return '';
-  const txt = m[_infoLang] || m.en;
+  const txt = m[LANG] || m.en;
   return `<span class="info-wrap"><span class="info-btn" onclick="event.stopPropagation();document.querySelectorAll('.info-popup.show').forEach(p=>p.classList.remove('show'));this.nextElementSibling.classList.toggle('show')">i</span><span class="info-popup">${{txt}}</span></span>`;
 }}
 
@@ -2288,7 +2288,7 @@ function ratingBadge(key, value) {{
   const m = METRIC_INFO[key];
   if (!m || value == null || value === '-') return '';
   const [label, color] = m.rate(parseFloat(value));
-  const labels = {{ good: _infoLang==='pl'?'OK':'good', ok: _infoLang==='pl'?'sredni':'fair', bad: _infoLang==='pl'?'zly':'poor' }};
+  const labels = {{ good: LANG==='pl'?'OK':'good', ok: LANG==='pl'?'\u015bredni':'fair', bad: LANG==='pl'?'z\u0142y':'poor' }};
   return `<span style="display:inline-block;font-size:0.7em;padding:1px 6px;border-radius:3px;margin-left:4px;background:${{color}};color:#000;font-weight:600">${{labels[label] || label}}</span>`;
 }}
 
@@ -2756,7 +2756,7 @@ function toggleLang() {{
 
 // ── Init ──
 var savedLang = localStorage.getItem('nm_lang');
-if (savedLang) LANG = savedLang;
+if (savedLang === 'en' || savedLang === 'pl') LANG = savedLang;
 updateLangBtn();
 document.getElementById('empty-msg').textContent = t('select_session');
 renderSidebar();
