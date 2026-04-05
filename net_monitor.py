@@ -2546,13 +2546,14 @@ function renderStabilityCards(s) {{
     const avgJitter = (rtt.reduce((a,r) => a + (r.jitter||0), 0) / rtt.length).toFixed(1);
     const avgRtt = (rtt.reduce((a,r) => a + (r.avg||0), 0) / rtt.length).toFixed(1);
     const maxJitter = Math.max(...rtt.map(r => r.jitter||0)).toFixed(1);
-    const jColor = maxJitter > 30 ? 'var(--red)' : maxJitter > 15 ? 'var(--yellow)' : 'var(--green)';
+    const avgJColor = avgJitter > 30 ? 'var(--red)' : avgJitter > 15 ? 'var(--yellow)' : 'var(--green)';
+    const maxJColor = maxJitter > 30 ? 'var(--red)' : maxJitter > 15 ? 'var(--yellow)' : 'var(--green)';
     html += `<div class="card">
       <h2>Latency &amp; Jitter</h2>
       <div class="grid grid-4">
         <div class="metric"><div class="num">${{avgRtt}}${{ratingBadge('rtt', avgRtt)}}</div><div class="lbl">avg RTT (ms) ${{infoTip('rtt')}}</div></div>
-        <div class="metric"><div class="num" style="color:${{jColor}}">${{avgJitter}}${{ratingBadge('jitter', avgJitter)}}</div><div class="lbl">avg jitter (ms) ${{infoTip('jitter')}}</div></div>
-        <div class="metric"><div class="num" style="color:${{jColor}}">${{maxJitter}}</div><div class="lbl">max jitter (ms)</div></div>
+        <div class="metric"><div class="num" style="color:${{avgJColor}}">${{avgJitter}}${{ratingBadge('jitter', avgJitter)}}</div><div class="lbl">avg jitter (ms) ${{infoTip('jitter')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{maxJColor}}">${{maxJitter}}</div><div class="lbl">max jitter (ms)</div></div>
         <div class="metric"><div class="num">${{rtt.length}}</div><div class="lbl">samples</div></div>
       </div>
       <div style="margin-top:10px;font-size:0.82em">
@@ -2575,7 +2576,7 @@ function renderStabilityCards(s) {{
     const avgAll = dns.filter(d => d.avg_ms != null).map(d => d.avg_ms);
     const overallAvg = avgAll.length ? (avgAll.reduce((a,b) => a+b, 0) / avgAll.length).toFixed(1) : '-';
     const maxDns = avgAll.length ? Math.max(...avgAll).toFixed(1) : '-';
-    const dnsColor = maxDns > 100 ? 'var(--red)' : maxDns > 50 ? 'var(--yellow)' : 'var(--green)';
+    const dnsColor = avgAll.length ? (maxDns > 100 ? 'var(--red)' : maxDns > 50 ? 'var(--yellow)' : 'var(--green)') : 'var(--fg2)';
     html += `<div class="card">
       <h2>DNS Resolution</h2>
       <div class="grid grid-3">
