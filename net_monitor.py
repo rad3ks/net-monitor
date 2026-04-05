@@ -20,6 +20,8 @@ Usage:
   python3 net_monitor.py --report --days 7   # Report for last 7 days
 """
 
+VERSION = "1.0.0"
+
 import subprocess
 import time
 import csv
