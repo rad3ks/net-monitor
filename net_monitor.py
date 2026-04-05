@@ -1656,6 +1656,10 @@ def _build_dashboard_data(days=30):
             "zone": "?", "reached": 0, "failed": 0, "targets": set()
         })
         timeline = []
+        rtt_all = []       # all rtt_stats from trace_cycles
+        dns_tests = []     # dns_test events
+        speed_tests = []   # speed_test events
+        route_changes = 0
 
         for ev in s["events"]:
             t = ev.get("type")
@@ -1689,11 +1693,23 @@ def _build_dashboard_data(days=30):
                         key = f"{hop_num_str}|{host}"
                         hop_detail[key]["reached"] += cnt
 
+                rtt_s = ev.get("rtt_stats")
+                if rtt_s:
+                    rtt_s["target"] = target_name
+                    rtt_s["ts"] = ev.get("ts", "")
+                    rtt_all.append(rtt_s)
+
                 timeline.append({
                     "ts": ev.get("ts", ""),
                     "ok": ok, "fail": fail,
                     "target": target_name,
                 })
+            elif t == "dns_test":
+                dns_tests.append(ev)
+            elif t == "speed_test":
+                speed_tests.append(ev)
+            elif t == "route_change":
+                route_changes += 1
             elif t == "drop_start":
                 timeline.append({
                     "ts": ev.get("ts", ""), "event": "drop_start",
@@ -1758,6 +1774,10 @@ def _build_dashboard_data(days=30):
             "hops": hops_list,
             "timeline": timeline,
             "failed_runs": failed_runs,
+            "rtt_stats": rtt_all,
+            "dns_tests": dns_tests,
+            "speed_tests": speed_tests,
+            "route_changes": route_changes,
         }
         session_summaries.append(summary)
 
@@ -2215,6 +2235,8 @@ function renderSession(s) {{
       </div>
     </div>
 
+    ${{renderStabilityCards(s)}}
+
     <div class="card">
       <h2>Timeline</h2>
       ${{renderTimeline(s.timeline)}}
@@ -2441,6 +2463,88 @@ function renderFailedRuns(runs) {{
 function escHtml(s) {{
   if (!s) return '';
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}}
+
+// ── Stability metrics cards ──
+function renderStabilityCards(s) {{
+  let html = '';
+
+  // RTT / Jitter card
+  const rtt = s.rtt_stats || [];
+  if (rtt.length) {{
+    const avgJitter = (rtt.reduce((a,r) => a + (r.jitter||0), 0) / rtt.length).toFixed(1);
+    const avgRtt = (rtt.reduce((a,r) => a + (r.avg||0), 0) / rtt.length).toFixed(1);
+    const maxJitter = Math.max(...rtt.map(r => r.jitter||0)).toFixed(1);
+    const jColor = maxJitter > 30 ? 'var(--red)' : maxJitter > 15 ? 'var(--yellow)' : 'var(--green)';
+    html += `<div class="card">
+      <h2>Latency &amp; Jitter</h2>
+      <div class="grid grid-4">
+        <div class="metric"><div class="num">${{avgRtt}}</div><div class="lbl">avg RTT (ms)</div></div>
+        <div class="metric"><div class="num" style="color:${{jColor}}">${{avgJitter}}</div><div class="lbl">avg jitter (ms)</div></div>
+        <div class="metric"><div class="num" style="color:${{jColor}}">${{maxJitter}}</div><div class="lbl">max jitter (ms)</div></div>
+        <div class="metric"><div class="num">${{rtt.length}}</div><div class="lbl">samples</div></div>
+      </div>
+      <div style="margin-top:10px;font-size:0.82em">
+        <table><tr><th>Time</th><th>Target</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>StdDev</th></tr>
+        ${{rtt.slice(-20).map(r => {{
+          const jc = (r.jitter||0) > 30 ? 'color:var(--red)' : (r.jitter||0) > 15 ? 'color:var(--yellow)' : '';
+          const time = r.ts ? r.ts.split('T')[1]?.substring(0,8) || '' : '';
+          return '<tr><td>' + time + '</td><td>' + (r.target||'') + '</td><td>' + (r.min||0) + '</td><td>' + (r.avg||0) + '</td><td>' + (r.max||0) + '</td><td style="' + jc + '"><b>' + (r.jitter||0) + '</b></td><td>' + (r.stddev||0) + '</td></tr>';
+        }}).join('')}}
+        </table>
+      </div>
+    </div>`;
+  }}
+
+  // DNS card
+  const dns = s.dns_tests || [];
+  if (dns.length) {{
+    const lastDns = dns[dns.length - 1];
+    const results = lastDns.results || [];
+    const avgAll = dns.filter(d => d.avg_ms != null).map(d => d.avg_ms);
+    const overallAvg = avgAll.length ? (avgAll.reduce((a,b) => a+b, 0) / avgAll.length).toFixed(1) : '-';
+    const maxDns = avgAll.length ? Math.max(...avgAll).toFixed(1) : '-';
+    const dnsColor = maxDns > 100 ? 'var(--red)' : maxDns > 50 ? 'var(--yellow)' : 'var(--green)';
+    html += `<div class="card">
+      <h2>DNS Resolution</h2>
+      <div class="grid grid-3">
+        <div class="metric"><div class="num" style="color:${{dnsColor}}">${{overallAvg}}</div><div class="lbl">avg DNS (ms)</div></div>
+        <div class="metric"><div class="num" style="color:${{dnsColor}}">${{maxDns}}</div><div class="lbl">max avg (ms)</div></div>
+        <div class="metric"><div class="num">${{dns.length}}</div><div class="lbl">tests</div></div>
+      </div>
+      <div style="margin-top:10px;font-size:0.82em">
+        <table><tr><th>Domain</th><th>Last (ms)</th><th>Status</th></tr>
+        ${{results.map(r => '<tr><td>' + r.domain + '</td><td>' + r.time_ms + '</td><td style="color:' + (r.ok ? 'var(--green)' : 'var(--red)') + '">' + (r.ok ? 'OK' : 'FAIL') + '</td></tr>').join('')}}
+        </table>
+      </div>
+    </div>`;
+  }}
+
+  // Speed + Route changes card
+  const speed = s.speed_tests || [];
+  const dl = speed.filter(t => t.test_name && t.test_name.includes('10MB'));
+  const ul = speed.filter(t => t.test_name && t.test_name.includes('upload'));
+  if (dl.length || ul.length || s.route_changes) {{
+    const lastDl = dl.length ? dl[dl.length - 1] : null;
+    const lastUl = ul.length ? ul[ul.length - 1] : null;
+    const rcColor = s.route_changes > 5 ? 'var(--red)' : s.route_changes > 0 ? 'var(--yellow)' : 'var(--green)';
+    html += `<div class="card">
+      <h2>Speed &amp; Routing</h2>
+      <div class="grid grid-4">
+        <div class="metric"><div class="num">${{lastDl ? lastDl.speed_mbps : '-'}}</div><div class="lbl">download (Mbps)</div></div>
+        <div class="metric"><div class="num">${{lastUl ? lastUl.speed_mbps : '-'}}</div><div class="lbl">upload (Mbps)</div></div>
+        <div class="metric"><div class="num" style="color:${{rcColor}}">${{s.route_changes || 0}}</div><div class="lbl">route changes</div></div>
+        <div class="metric"><div class="num">${{dl.length + ul.length}}</div><div class="lbl">speed tests</div></div>
+      </div>`;
+    if (lastDl && lastDl.dns_ms != null) {{
+      html += `<div style="margin-top:10px;font-size:0.82em">
+        <b>TCP Timing (last):</b> DNS ${{lastDl.dns_ms}}ms | TCP ${{lastDl.connect_ms}}ms | TLS ${{lastDl.tls_ms}}ms | TTFB ${{lastDl.ttfb_ms}}ms
+      </div>`;
+    }}
+    html += '</div>';
+  }}
+
+  return html;
 }}
 
 // ── Monitor status bar ──
