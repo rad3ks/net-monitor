@@ -1879,18 +1879,33 @@ def _build_dashboard_html(data_json, days, live=False):
         live_js = """
 // ── Live auto-refresh ──
 (function() {
-  var POLL_INTERVAL = 5000;
-  var indicator = document.createElement('div');
-  indicator.style.cssText = 'position:fixed;top:8px;right:12px;font-size:0.75em;color:var(--green);z-index:999;font-family:monospace';
-  indicator.innerHTML = '&#9679; LIVE';
-  document.body.appendChild(indicator);
+  var POLL_SEC = 5;
+  var countdown = POLL_SEC;
+  var polling = false;
+
+  var btn = document.createElement('button');
+  btn.style.cssText = 'position:fixed;top:8px;right:12px;font-size:0.75em;z-index:999;font-family:monospace;' +
+    'background:var(--bg3);color:var(--green);border:1px solid var(--green);border-radius:4px;padding:3px 10px;cursor:pointer';
+  btn.innerHTML = '&#9679; LIVE ' + POLL_SEC + 's';
+  btn.title = 'Click to refresh now';
+  btn.onclick = function() { countdown = 0; doRefresh(); };
+  document.body.appendChild(btn);
 
   var lastDataHash = JSON.stringify(DATA);
 
-  async function poll() {
+  function updateBtn(text, color) {
+    btn.style.color = color;
+    btn.style.borderColor = color;
+    btn.innerHTML = text;
+  }
+
+  async function doRefresh() {
+    if (polling) return;
+    polling = true;
+    updateBtn('&#8635; ...', 'var(--yellow)');
     try {
       var resp = await fetch('/data');
-      if (!resp.ok) return;
+      if (!resp.ok) { polling = false; return; }
       var payload = await resp.json();
       var sessions = payload.sessions || payload;
       MONITOR = payload.monitor || {};
@@ -1906,21 +1921,29 @@ def _build_dashboard_html(data_json, days, live=False):
         } else if (DATA.length) {
           selectSession(DATA.length - 1);
         }
-        indicator.innerHTML = '&#9679; LIVE &#8635; ' + new Date().toLocaleTimeString();
       }
       renderStatusBar();
+      countdown = POLL_SEC;
     } catch(e) {
-      indicator.style.color = 'var(--red)';
-      indicator.innerHTML = '&#9679; OFFLINE';
-      setTimeout(function() { indicator.style.color = 'var(--green)'; }, 2000);
+      updateBtn('&#9679; OFFLINE', 'var(--red)');
+      countdown = POLL_SEC;
     }
+    polling = false;
   }
 
-  setInterval(poll, POLL_INTERVAL);
+  setInterval(function() {
+    if (polling) return;
+    countdown--;
+    if (countdown <= 0) {
+      doRefresh();
+    } else {
+      updateBtn('&#9679; LIVE ' + countdown + 's', 'var(--green)');
+    }
+  }, 1000);
 })();
 """
     return f'''<!DOCTYPE html>
-<html lang="pl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2061,7 +2084,7 @@ tr:hover td {{ background: var(--bg3); }}
 </div>
 
 <div class="main" id="main">
-  <div class="empty">Wybierz sesje z listy po lewej</div>
+  <div class="empty">Select a session from the list</div>
 </div>
 
 </div>
@@ -2157,7 +2180,7 @@ function renderSession(s) {{
 
   main.innerHTML = `
     <div class="card">
-      <h2>Sesja: ${{s.start || s.name}}</h2>
+      <h2>Session: ${{s.start || s.name}}</h2>
       <div class="conn-grid">
         <div class="conn-cell"><div class="cl">Interface</div><div class="cv">${{s.interface}} (${{s.interface_type}})</div></div>
         <div class="conn-cell"><div class="cl">IP</div><div class="cv">${{s.ip}}</div></div>
@@ -2173,7 +2196,7 @@ function renderSession(s) {{
 
     <div class="card">
       <div class="grid grid-4">
-        <div class="metric"><div class="num">${{s.total_runs}}</div><div class="lbl">prob lacznie</div></div>
+        <div class="metric"><div class="num">${{s.total_runs}}</div><div class="lbl">total runs</div></div>
         <div class="metric"><div class="num" style="color:var(--green)">${{s.ok_runs}}</div><div class="lbl">OK</div></div>
         <div class="metric"><div class="num" style="color:var(--red)">${{s.fail_runs}}</div><div class="lbl">FAIL</div></div>
         <div class="metric"><div class="num" style="color:${{s.success_pct>=95?'var(--green)':s.success_pct>=80?'var(--yellow)':'var(--red)'}}">${{s.success_pct}}%</div><div class="lbl">success rate</div></div>
@@ -2186,17 +2209,17 @@ function renderSession(s) {{
     </div>
 
     <div class="card">
-      <h2>Analiza bledow</h2>
+      <h2>Fault Analysis</h2>
       <div class="grid grid-2">
         <div>
-          <h2 style="margin-top:0">Bledy per strefa</h2>
+          <h2 style="margin-top:0">Faults by Zone</h2>
           <div class="pie-row">
             <canvas id="${{pieId1}}" width="140" height="140"></canvas>
             <div class="pie-legend" id="legend-${{pieId1}}"></div>
           </div>
         </div>
         <div>
-          <h2 style="margin-top:0">Bledy per hop (IP)</h2>
+          <h2 style="margin-top:0">Faults by Hop (IP)</h2>
           <div class="pie-row">
             <canvas id="${{pieId2}}" width="140" height="140"></canvas>
             <div class="pie-legend" id="legend-${{pieId2}}"></div>
@@ -2206,24 +2229,24 @@ function renderSession(s) {{
     </div>
 
     <div class="card">
-      <h2>Awarie per hop / IP</h2>
-      ${{failHops.length ? renderHopTable(s.hops, s.total_runs) : '<div style="color:var(--green)">Brak awarii</div>'}}
+      <h2>Failures by Hop / IP</h2>
+      ${{failHops.length ? renderHopTable(s.hops, s.total_runs) : '<div style="color:var(--green)">No failures</div>'}}
     </div>
 
     ${{s.rssi_history && s.rssi_history.length > 1 ? `<div class="card">
-      <h2>WiFi Signal (RSSI) w czasie</h2>
+      <h2>WiFi Signal (RSSI) over time</h2>
       ${{renderRssiChart(s.rssi_history)}}
     </div>` : ''}}
 
     ${{s.drops.length ? `<div class="card">
-      <h2>Przerwy w lacznosci (${{s.drops.length}})</h2>
+      <h2>Connectivity Drops (${{s.drops.length}})</h2>
       ${{renderDrops(s.drops)}}
     </div>` : ''}}
 
     ${{(s.failed_runs && s.failed_runs.length) ? `<div class="card">
-      <h2>Sfailowane runy — dowody (${{s.failed_runs.length}})</h2>
+      <h2>Failed Runs — Evidence (${{s.failed_runs.length}})</h2>
       <div style="font-size:0.82em;color:var(--fg2);margin-bottom:10px">
-        Kazdy wpis zawiera surowe logi z pinga per hop. Kliknij aby rozwinac.
+        Each entry contains raw ping logs per hop. Click to expand.
       </div>
       ${{renderFailedRuns(s.failed_runs)}}
     </div>` : ''}}
@@ -2268,7 +2291,7 @@ function renderSession(s) {{
 }}
 
 function renderTimeline(timeline) {{
-  if (!timeline || !timeline.length) return '<div style="color:var(--fg3)">Brak danych</div>';
+  if (!timeline || !timeline.length) return '<div style="color:var(--fg3)">No data</div>';
   let html = '<div class="timeline">';
   timeline.forEach(t => {{
     if (t.event === 'drop_start') {{
@@ -2292,7 +2315,7 @@ function renderTimeline(timeline) {{
 }}
 
 function renderHopTable(hops, totalRuns) {{
-  let html = '<table><tr><th>Hop</th><th>IP</th><th>Strefa</th><th>Awarie</th><th>Targets</th><th>% bledow</th><th></th></tr>';
+  let html = '<table><tr><th>Hop</th><th>IP</th><th>Zone</th><th>Failures</th><th>Targets</th><th>Fail %</th><th></th></tr>';
   hops.filter(h => h.failed > 0).sort((a,b) => b.failed - a.failed).forEach(h => {{
     const total = h.reached + h.failed;
     const pct = total > 0 ? (h.failed/total*100).toFixed(1) : '0';
@@ -2315,7 +2338,7 @@ function renderHopTable(hops, totalRuns) {{
 }}
 
 function renderDrops(drops) {{
-  let html = '<table><tr><th>Czas</th><th>Czas trwania</th><th>Strefa</th></tr>';
+  let html = '<table><tr><th>Time</th><th>Duration</th><th>Zone</th></tr>';
   drops.forEach(d => {{
     html += `<tr><td>${{d.ts||''}}</td><td style="font-weight:600;color:var(--red)">${{d.duration||0}}s</td>
       <td style="color:${{zc(d.zone)}}">${{d.zone||'?'}}</td></tr>`;
@@ -2335,7 +2358,7 @@ function renderRssiChart(history) {{
   const mx = Math.max(...vals);
 
   let html = `<div style="font-size:0.82em;color:var(--fg2);margin-bottom:4px">` +
-    `Min: <b>${{mn}}</b> dBm | Max: <b>${{mx}}</b> dBm | Avg: <b>${{avg}}</b> dBm | Punktow: ${{vals.length}}</div>`;
+    `Min: <b>${{mn}}</b> dBm | Max: <b>${{mx}}</b> dBm | Avg: <b>${{avg}}</b> dBm | Samples: ${{vals.length}}</div>`;
   html += '<div class="rssi-chart">';
   history.forEach(h => {{
     const pct = Math.max(10, ((h.rssi - minR + 5) / (range + 10)) * 100);
@@ -2387,7 +2410,7 @@ function renderFailedRuns(runs) {{
     html += '</div>';
 
     // Show raw logs per hop
-    html += '<div style="font-size:0.82em;color:var(--fg2);margin-bottom:4px">Surowe logi ping per hop:</div>';
+    html += '<div style="font-size:0.82em;color:var(--fg2);margin-bottom:4px">Raw ping logs per hop:</div>';
     (r.hops_log || []).forEach(h => {{
       if (h.status !== 'skipped' && h.raw) {{
         const statusColor = h.status === 'timeout' ? 'var(--red)' : 'var(--green)';
@@ -2416,13 +2439,13 @@ function renderStatusBar() {{
     bar.style.display = 'block';
     bar.style.background = '#0d1117';
     bar.style.color = '#3fb950';
-    bar.innerHTML = '\u25cf Monitoring aktywny &mdash; PID ' + MONITOR.pid
-      + (MONITOR.session ? ' | sesja: ' + MONITOR.session : '');
+    bar.innerHTML = '\u25cf Monitoring active &mdash; PID ' + MONITOR.pid
+      + (MONITOR.session ? ' | session: ' + MONITOR.session : '');
   }} else if (Object.keys(MONITOR).length) {{
     bar.style.display = 'block';
     bar.style.background = '#0d1117';
     bar.style.color = '#d29922';
-    bar.innerHTML = '\u25cb Monitoring nieaktywny';
+    bar.innerHTML = '\u25cb Monitoring inactive';
   }} else {{
     bar.style.display = 'none';
   }}
