@@ -1277,6 +1277,7 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
         stats["zone_faults"][f["zone"]] += 1
 
     # --- Log events ---
+    clear_live_status()  # clear before logging to prevent double-counting race
     log_event("trace_cycle", {
         "target_name": target_name, "target": target,
         "cycle": cycle_num, "runs": total,
@@ -1287,7 +1288,6 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
         "hop_failed": dict(hop_failed),
         "failed_runs_detail": failed_runs_detail,
     })
-    clear_live_status()  # prevent double-counting with injected live data
 
     # --- Log incidents ---
     if fail_runs > 0:
@@ -1852,9 +1852,6 @@ def _build_dashboard_data(days=30):
                 "ok": live.get("ok", 0),
                 "fail": live.get("fail", 0),
                 "target": live.get("target", "?"),
-                "in_progress": True,
-                "run": live.get("run", 0),
-                "total_runs": live.get("total_runs", 0),
             })
             # Add to session totals
             last["total_runs"] += live.get("ok", 0) + live.get("fail", 0)
@@ -2071,8 +2068,7 @@ def _build_dashboard_html(data_json, days, live=False):
       doRefresh();
     } else {
       var ago = POLL_SEC - countdown;
-      var label = ago < 1 ? '&#8635; ' + t('updated') : '&#8635; ' + t('updated') + ' ' + ago + 's ' + t('ago');
-      updateBtn(label, ago < 10 ? 'var(--green)' : 'var(--fg2)');
+      updateBtn('&#8635; ' + t('updated') + ' ' + ago + 's ' + t('ago'), ago < 10 ? 'var(--green)' : 'var(--fg2)');
     }
   }, 1000);
 })();
@@ -2439,8 +2435,8 @@ function renderSidebar() {{
   DATA.forEach((s, i) => {{
     const bc = s.success_pct >= 95 ? 's-ok' : s.success_pct >= 80 ? 's-warn' : 's-bad';
     const d = s.start || s.name;
-    const conn = s.wifi_ssid ? s.wifi_ssid + ' ' + (s.wifi_rssi||'') + 'dBm'
-      : s.interface_type === 'ethernet' ? 'Ethernet' : s.interface_type;
+    const conn = s.wifi_ssid ? escHtml(s.wifi_ssid) + ' ' + (s.wifi_rssi||'') + 'dBm'
+      : s.interface_type === 'ethernet' ? 'Ethernet' : escHtml(s.interface_type);
     const btn = document.createElement('button');
     btn.className = 'session-btn';
     btn.innerHTML = `<div class="s-date">${{d}}</div>
@@ -2477,7 +2473,7 @@ function renderSession(s) {{
         <div class="conn-cell"><div class="cl">${{t('ip')}}</div><div class="cv">${{s.ip}}</div></div>
         <div class="conn-cell"><div class="cl">${{t('gateway')}}</div><div class="cv">${{s.gateway}}</div></div>
         ${{s.wifi_ssid ? `
-          <div class="conn-cell"><div class="cl">${{t('ssid')}}</div><div class="cv">${{s.wifi_ssid}}</div></div>
+          <div class="conn-cell"><div class="cl">${{t('ssid')}}</div><div class="cv">${{escHtml(s.wifi_ssid)}}</div></div>
           <div class="conn-cell"><div class="cl">${{t('signal')}}</div><div class="cv">${{s.wifi_rssi||'?'}} dBm</div></div>
           <div class="conn-cell"><div class="cl">${{t('channel')}}</div><div class="cv">${{s.wifi_channel||'?'}}</div></div>
           <div class="conn-cell"><div class="cl">${{t('phy')}}</div><div class="cv">${{s.wifi_phy||'?'}}</div></div>
@@ -2589,10 +2585,10 @@ function renderTimeline(timeline) {{
   timeline.forEach(ev => {{
     if (ev.event === 'drop_start') {{
       html += `<div class="tbar" style="height:100%;background:var(--red);opacity:0.3"
-        data-tip="${{t('drop_start')}} ${{ev.zone}}"></div>`;
+        data-tip="${{escHtml(t('drop_start') + ' ' + (ev.zone||''))}}"></div>`;
     }} else if (ev.event === 'drop_end') {{
       html += `<div class="tbar" style="height:100%;background:var(--red)"
-        data-tip="${{t('drop_tooltip')}} ${{ev.duration}}s ${{ev.zone}}"></div>`;
+        data-tip="${{escHtml(t('drop_tooltip') + ' ' + ev.duration + 's ' + (ev.zone||''))}}"></div>`;
     }} else {{
       const total = (ev.ok||0) + (ev.fail||0);
       const pct = total > 0 ? ev.ok/total : 1;
@@ -2600,7 +2596,7 @@ function renderTimeline(timeline) {{
       const c = pct >= 1 ? 'var(--green)' : pct >= 0.8 ? 'var(--yellow)' : 'var(--red)';
       const time = ev.ts ? ev.ts.split('T')[1]?.substring(0,8) || '' : '';
       html += `<div class="tbar" style="height:${{h}}%;background:${{c}}"
-        data-tip="${{time}} ${{ev.target}} ${{ev.ok}}/${{total}} OK"></div>`;
+        data-tip="${{escHtml(time + ' ' + (ev.target||'') + ' ' + ev.ok + '/' + total + ' OK')}}"></div>`;
     }}
   }});
   html += '</div>';
@@ -2618,10 +2614,10 @@ function renderHopTable(hops, totalRuns) {{
     const barColor = pctNum > 20 ? 'var(--red)' : pctNum > 5 ? 'var(--yellow)' : 'var(--green)';
     html += `<tr>
       <td><b>hop ${{h.hop_num}}</b></td>
-      <td class="hop-ip">${{h.ip}}</td>
-      <td><span class="hop-zone ${{zclass}}">${{h.zone}}</span></td>
+      <td class="hop-ip">${{escHtml(h.ip)}}</td>
+      <td><span class="hop-zone ${{zclass}}">${{escHtml(h.zone)}}</span></td>
       <td style="color:var(--red);font-weight:600">${{h.failed}}</td>
-      <td style="font-size:0.8em;color:var(--fg2)">${{h.targets.join(', ')}}</td>
+      <td style="font-size:0.8em;color:var(--fg2)">${{h.targets.map(escHtml).join(', ')}}</td>
       <td>${{pct}}%</td>
       <td style="width:100px"><div class="bar-bg"><div class="bar-fill" style="width:${{Math.min(100,pctNum)}}%;background:${{barColor}}"></div></div></td>
     </tr>`;
@@ -2633,8 +2629,8 @@ function renderHopTable(hops, totalRuns) {{
 function renderDrops(drops) {{
   let html = '<table><tr><th>' + t('time') + '</th><th>' + t('duration') + '</th><th>' + t('zone') + '</th></tr>';
   drops.forEach(d => {{
-    html += `<tr><td>${{d.ts||''}}</td><td style="font-weight:600;color:var(--red)">${{d.duration||0}}s</td>
-      <td style="color:${{zc(d.zone)}}">${{d.zone||'?'}}</td></tr>`;
+    html += `<tr><td>${{escHtml(d.ts||'')}}</td><td style="font-weight:600;color:var(--red)">${{d.duration||0}}s</td>
+      <td style="color:${{zc(d.zone)}}">${{escHtml(d.zone||'?')}}</td></tr>`;
   }});
   html += '</table>';
   return html;
@@ -2670,7 +2666,7 @@ function renderFailedRuns(runs) {{
   let html = '';
   runs.forEach((r, idx) => {{
     const time = r.ts ? r.ts.split('T')[1]?.substring(0,8) || r.ts : '';
-    const hopInfo = r.fail_hop ? `hop ${{r.fail_hop}} [${{r.fail_zone}}] ${{r.fail_host}}` : 'unknown';
+    const hopInfo = r.fail_hop ? `hop ${{r.fail_hop}} [${{escHtml(r.fail_zone)}}] ${{escHtml(r.fail_host)}}` : 'unknown';
     const zclass = (r.fail_zone==='LOCAL') ? 'zone-local'
       : (r.fail_zone==='ISP_EDGE'||r.fail_zone==='ISP_CORE') ? 'zone-isp' : 'zone-transit';
 
@@ -2680,7 +2676,7 @@ function renderFailedRuns(runs) {{
           <span class="toggle-arrow">&#9654;</span>
           <b style="color:var(--red)">Run #${{r.run}}</b>
           <span style="color:var(--fg2);margin:0 8px">${{time}}</span>
-          <span style="color:var(--fg2)">${{r.target}}</span>
+          <span style="color:var(--fg2)">${{escHtml(r.target)}}</span>
           <span style="margin-left:8px">&#10007; ${{hopInfo}}</span>
           <span class="hop-zone ${{zclass}}" style="margin-left:6px">${{r.fail_zone||'?'}}</span>
         </div>
