@@ -2001,7 +2001,7 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
   border-right: 1px solid var(--border); overflow-y: auto;
   padding: 16px 0;
 }}
-.sidebar h1 {{ font-size: 1em; color: var(--blue); padding: 0 16px 12px; }}
+.sidebar h1 {{ font-size: 1em; color: var(--blue); padding: 0 16px 0; }}
 .session-btn {{
   display: block; width: 100%; padding: 10px 16px;
   background: none; border: none; border-left: 3px solid transparent;
@@ -2120,10 +2120,12 @@ tr:hover td {{ background: var(--bg3); }}
 <div class="layout">
 
 <div class="sidebar" id="sidebar">
-  <h1>Net Monitor</h1>
-  <div style="display:flex;gap:6px;margin:-8px 0 10px 0">
-    <button id="lang-btn" onclick="toggleLang()" style="font-size:0.7em;background:var(--bg3);color:var(--fg2);border:1px solid var(--fg3);border-radius:3px;padding:2px 8px;cursor:pointer"></button>
-    <button id="live-btn" title="Click to refresh" style="font-size:0.7em;background:var(--bg3);color:var(--green);border:1px solid var(--green);border-radius:3px;padding:2px 8px;cursor:pointer;display:none">&#9679; LIVE</button>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+    <h1 style="margin:0">Net Monitor</h1>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button id="live-btn" title="Click to refresh" style="font-size:0.7em;background:var(--bg3);color:var(--green);border:1px solid var(--green);border-radius:3px;padding:2px 8px;cursor:pointer;display:none">&#9679; LIVE</button>
+      <button id="lang-btn" onclick="toggleLang()" style="font-size:0.7em;background:var(--bg3);color:var(--fg2);border:1px solid var(--fg3);border-radius:3px;padding:2px 8px;cursor:pointer"></button>
+    </div>
   </div>
   <div id="session-list"></div>
 </div>
@@ -2157,6 +2159,26 @@ const I18N = {{
     raw_logs: 'Raw ping logs per hop:', samples: 'Samples',
     monitoring_active: 'Monitoring active', monitoring_inactive: 'Monitoring inactive',
     slow: 'slow!', timeline: 'Timeline',
+    // connection info
+    iface: 'Interface', ip: 'IP', gateway: 'Gateway',
+    ssid: 'SSID', signal: 'Signal', channel: 'Channel', phy: 'PHY',
+    // metrics card
+    ok_runs: 'OK', fail_runs: 'FAIL', success_rate: 'success rate',
+    // stability cards
+    latency_jitter: 'Latency &amp; Jitter',
+    avg_rtt_ms: 'avg RTT (ms)', avg_jitter_ms: 'avg jitter (ms)',
+    max_jitter_ms: 'max jitter (ms)',
+    dns_resolution: 'DNS Resolution',
+    avg_dns_ms: 'avg DNS (ms)', max_avg_ms: 'max avg (ms)', tests: 'tests',
+    domain: 'Domain', last_ms: 'Last (ms)', status: 'Status',
+    speed_routing: 'Speed &amp; Routing',
+    download_mbps: 'download (Mbps)', upload_mbps: 'upload (Mbps)',
+    route_changes: 'route changes', speed_tests: 'speed tests',
+    tcp_timing: 'TCP Timing (last):',
+    drop_start: 'DROP START', drop_tooltip: 'DROP',
+    target: 'Target', min: 'Min', avg: 'Avg', max: 'Max',
+    jitter_hdr: 'Jitter', stddev: 'StdDev',
+    ip_header: 'IP', targets_header: 'Targets',
   }},
   pl: {{
     select_session: 'Wybierz sesj\u0119 z listy',
@@ -2171,6 +2193,26 @@ const I18N = {{
     raw_logs: 'Surowe logi ping per hop:', samples: 'Punkt\u00f3w',
     monitoring_active: 'Monitoring aktywny', monitoring_inactive: 'Monitoring nieaktywny',
     slow: 'powolny!', timeline: 'Timeline',
+    // connection info
+    iface: 'Interfejs', ip: 'IP', gateway: 'Brama',
+    ssid: 'SSID', signal: 'Sygna\u0142', channel: 'Kana\u0142', phy: 'PHY',
+    // metrics card
+    ok_runs: 'OK', fail_runs: 'B\u0141\u0104D', success_rate: 'skuteczno\u015b\u0107',
+    // stability cards
+    latency_jitter: 'Opó\u017anienie i jitter',
+    avg_rtt_ms: '\u015br. RTT (ms)', avg_jitter_ms: '\u015br. jitter (ms)',
+    max_jitter_ms: 'max jitter (ms)',
+    dns_resolution: 'Rozpoznawanie DNS',
+    avg_dns_ms: '\u015br. DNS (ms)', max_avg_ms: 'max \u015br. (ms)', tests: 'test\u00f3w',
+    domain: 'Domena', last_ms: 'Ostatni (ms)', status: 'Status',
+    speed_routing: 'Pr\u0119dko\u015b\u0107 i routing',
+    download_mbps: 'pobieranie (Mbps)', upload_mbps: 'wysy\u0142anie (Mbps)',
+    route_changes: 'zmian trasy', speed_tests: 'test\u00f3w pr\u0119dko\u015bci',
+    tcp_timing: 'Czasy TCP (ostatni):',
+    drop_start: 'POCZ\u0104TEK PRZERWY', drop_tooltip: 'PRZERWA',
+    target: 'Cel', min: 'Min', avg: '\u015ar.', max: 'Max',
+    jitter_hdr: 'Jitter', stddev: 'Odch.std.',
+    ip_header: 'IP', targets_header: 'Cele',
   }}
 }};
 
@@ -2328,14 +2370,14 @@ function renderSession(s) {{
     <div class="card">
       <h2>${{t('session')}}: ${{s.start || s.name}}</h2>
       <div class="conn-grid">
-        <div class="conn-cell"><div class="cl">Interface</div><div class="cv">${{s.interface}} (${{s.interface_type}})</div></div>
-        <div class="conn-cell"><div class="cl">IP</div><div class="cv">${{s.ip}}</div></div>
-        <div class="conn-cell"><div class="cl">Gateway</div><div class="cv">${{s.gateway}}</div></div>
+        <div class="conn-cell"><div class="cl">${{t('iface')}}</div><div class="cv">${{s.interface}} (${{s.interface_type}})</div></div>
+        <div class="conn-cell"><div class="cl">${{t('ip')}}</div><div class="cv">${{s.ip}}</div></div>
+        <div class="conn-cell"><div class="cl">${{t('gateway')}}</div><div class="cv">${{s.gateway}}</div></div>
         ${{s.wifi_ssid ? `
-          <div class="conn-cell"><div class="cl">SSID</div><div class="cv">${{s.wifi_ssid}}</div></div>
-          <div class="conn-cell"><div class="cl">Signal</div><div class="cv">${{s.wifi_rssi||'?'}} dBm</div></div>
-          <div class="conn-cell"><div class="cl">Channel</div><div class="cv">${{s.wifi_channel||'?'}}</div></div>
-          <div class="conn-cell"><div class="cl">PHY</div><div class="cv">${{s.wifi_phy||'?'}}</div></div>
+          <div class="conn-cell"><div class="cl">${{t('ssid')}}</div><div class="cv">${{s.wifi_ssid}}</div></div>
+          <div class="conn-cell"><div class="cl">${{t('signal')}}</div><div class="cv">${{s.wifi_rssi||'?'}} dBm</div></div>
+          <div class="conn-cell"><div class="cl">${{t('channel')}}</div><div class="cv">${{s.wifi_channel||'?'}}</div></div>
+          <div class="conn-cell"><div class="cl">${{t('phy')}}</div><div class="cv">${{s.wifi_phy||'?'}}</div></div>
         ` : ''}}
       </div>
     </div>
@@ -2343,9 +2385,9 @@ function renderSession(s) {{
     <div class="card">
       <div class="grid grid-4">
         <div class="metric"><div class="num">${{s.total_runs}}</div><div class="lbl">${{t('total_runs')}}</div></div>
-        <div class="metric"><div class="num" style="color:var(--green)">${{s.ok_runs}}</div><div class="lbl">OK</div></div>
-        <div class="metric"><div class="num" style="color:var(--red)">${{s.fail_runs}}</div><div class="lbl">FAIL</div></div>
-        <div class="metric"><div class="num" style="color:${{s.success_pct>=95?'var(--green)':s.success_pct>=80?'var(--yellow)':'var(--red)'}}">${{s.success_pct}}%</div><div class="lbl">success rate</div></div>
+        <div class="metric"><div class="num" style="color:var(--green)">${{s.ok_runs}}</div><div class="lbl">${{t('ok_runs')}}</div></div>
+        <div class="metric"><div class="num" style="color:var(--red)">${{s.fail_runs}}</div><div class="lbl">${{t('fail_runs')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{s.success_pct>=95?'var(--green)':s.success_pct>=80?'var(--yellow)':'var(--red)'}}">${{s.success_pct}}%</div><div class="lbl">${{t('success_rate')}}</div></div>
       </div>
     </div>
 
@@ -2441,21 +2483,21 @@ function renderSession(s) {{
 function renderTimeline(timeline) {{
   if (!timeline || !timeline.length) return '<div style="color:var(--fg3)">' + t('no_data') + '</div>';
   let html = '<div class="timeline">';
-  timeline.forEach(t => {{
-    if (t.event === 'drop_start') {{
+  timeline.forEach(ev => {{
+    if (ev.event === 'drop_start') {{
       html += `<div class="tbar" style="height:100%;background:var(--red);opacity:0.3"
-        data-tip="DROP START ${{t.zone}}"></div>`;
-    }} else if (t.event === 'drop_end') {{
+        data-tip="${{t('drop_start')}} ${{ev.zone}}"></div>`;
+    }} else if (ev.event === 'drop_end') {{
       html += `<div class="tbar" style="height:100%;background:var(--red)"
-        data-tip="DROP ${{t.duration}}s ${{t.zone}}"></div>`;
+        data-tip="${{t('drop_tooltip')}} ${{ev.duration}}s ${{ev.zone}}"></div>`;
     }} else {{
-      const total = (t.ok||0) + (t.fail||0);
-      const pct = total > 0 ? t.ok/total : 1;
+      const total = (ev.ok||0) + (ev.fail||0);
+      const pct = total > 0 ? ev.ok/total : 1;
       const h = Math.max(20, pct * 100);
       const c = pct >= 1 ? 'var(--green)' : pct >= 0.8 ? 'var(--yellow)' : 'var(--red)';
-      const time = t.ts ? t.ts.split('T')[1]?.substring(0,8) || '' : '';
+      const time = ev.ts ? ev.ts.split('T')[1]?.substring(0,8) || '' : '';
       html += `<div class="tbar" style="height:${{h}}%;background:${{c}}"
-        data-tip="${{time}} ${{t.target}} ${{t.ok}}/${{total}} OK"></div>`;
+        data-tip="${{time}} ${{ev.target}} ${{ev.ok}}/${{total}} OK"></div>`;
     }}
   }});
   html += '</div>';
@@ -2463,7 +2505,7 @@ function renderTimeline(timeline) {{
 }}
 
 function renderHopTable(hops, totalRuns) {{
-  let html = '<table><tr><th>' + t('hop') + '</th><th>IP</th><th>' + t('zone') + '</th><th>' + t('failures') + '</th><th>Targets</th><th>' + t('fail_pct') + '</th><th></th></tr>';
+  let html = '<table><tr><th>' + t('hop') + '</th><th>' + t('ip_header') + '</th><th>' + t('zone') + '</th><th>' + t('failures') + '</th><th>' + t('targets_header') + '</th><th>' + t('fail_pct') + '</th><th></th></tr>';
   hops.filter(h => h.failed > 0).sort((a,b) => b.failed - a.failed).forEach(h => {{
     const total = h.reached + h.failed;
     const pct = total > 0 ? (h.failed/total*100).toFixed(1) : '0';
@@ -2592,15 +2634,15 @@ function renderStabilityCards(s) {{
     const avgJColor = avgJitter > 30 ? 'var(--red)' : avgJitter > 15 ? 'var(--yellow)' : 'var(--green)';
     const maxJColor = maxJitter > 30 ? 'var(--red)' : maxJitter > 15 ? 'var(--yellow)' : 'var(--green)';
     html += `<div class="card">
-      <h2>Latency &amp; Jitter</h2>
+      <h2>${{t('latency_jitter')}}</h2>
       <div class="grid grid-4">
-        <div class="metric"><div class="num">${{avgRtt}}${{ratingBadge('rtt', avgRtt)}}</div><div class="lbl">avg RTT (ms) ${{infoTip('rtt')}}</div></div>
-        <div class="metric"><div class="num" style="color:${{avgJColor}}">${{avgJitter}}${{ratingBadge('jitter', avgJitter)}}</div><div class="lbl">avg jitter (ms) ${{infoTip('jitter')}}</div></div>
-        <div class="metric"><div class="num" style="color:${{maxJColor}}">${{maxJitter}}</div><div class="lbl">max jitter (ms)</div></div>
-        <div class="metric"><div class="num">${{rtt.length}}</div><div class="lbl">samples</div></div>
+        <div class="metric"><div class="num">${{avgRtt}}${{ratingBadge('rtt', avgRtt)}}</div><div class="lbl">${{t('avg_rtt_ms')}} ${{infoTip('rtt')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{avgJColor}}">${{avgJitter}}${{ratingBadge('jitter', avgJitter)}}</div><div class="lbl">${{t('avg_jitter_ms')}} ${{infoTip('jitter')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{maxJColor}}">${{maxJitter}}</div><div class="lbl">${{t('max_jitter_ms')}}</div></div>
+        <div class="metric"><div class="num">${{rtt.length}}</div><div class="lbl">${{t('samples')}}</div></div>
       </div>
       <div style="margin-top:10px;font-size:0.82em">
-        <table><tr><th>Time</th><th>Target</th><th>Min</th><th>Avg</th><th>Max</th><th>Jitter</th><th>StdDev</th></tr>
+        <table><tr><th>${{t('time')}}</th><th>${{t('target')}}</th><th>${{t('min')}}</th><th>${{t('avg')}}</th><th>${{t('max')}}</th><th>${{t('jitter_hdr')}}</th><th>${{t('stddev')}}</th></tr>
         ${{rtt.slice(-20).map(r => {{
           const jc = (r.jitter||0) > 30 ? 'color:var(--red)' : (r.jitter||0) > 15 ? 'color:var(--yellow)' : '';
           const time = r.ts ? r.ts.split('T')[1]?.substring(0,8) || '' : '';
@@ -2621,14 +2663,14 @@ function renderStabilityCards(s) {{
     const maxDns = avgAll.length ? Math.max(...avgAll).toFixed(1) : '-';
     const dnsColor = avgAll.length ? (maxDns > 100 ? 'var(--red)' : maxDns > 50 ? 'var(--yellow)' : 'var(--green)') : 'var(--fg2)';
     html += `<div class="card">
-      <h2>DNS Resolution</h2>
+      <h2>${{t('dns_resolution')}}</h2>
       <div class="grid grid-3">
-        <div class="metric"><div class="num" style="color:${{dnsColor}}">${{overallAvg}}${{ratingBadge('dns', overallAvg)}}</div><div class="lbl">avg DNS (ms) ${{infoTip('dns')}}</div></div>
-        <div class="metric"><div class="num" style="color:${{dnsColor}}">${{maxDns}}</div><div class="lbl">max avg (ms)</div></div>
-        <div class="metric"><div class="num">${{dns.length}}</div><div class="lbl">tests</div></div>
+        <div class="metric"><div class="num" style="color:${{dnsColor}}">${{overallAvg}}${{ratingBadge('dns', overallAvg)}}</div><div class="lbl">${{t('avg_dns_ms')}} ${{infoTip('dns')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{dnsColor}}">${{maxDns}}</div><div class="lbl">${{t('max_avg_ms')}}</div></div>
+        <div class="metric"><div class="num">${{dns.length}}</div><div class="lbl">${{t('tests')}}</div></div>
       </div>
       <div style="margin-top:10px;font-size:0.82em">
-        <table><tr><th>Domain</th><th>Last (ms)</th><th>Status</th></tr>
+        <table><tr><th>${{t('domain')}}</th><th>${{t('last_ms')}}</th><th>${{t('status')}}</th></tr>
         ${{results.map(r => '<tr><td>' + r.domain + '</td><td>' + r.time_ms + '</td><td style="color:' + (r.ok ? 'var(--green)' : 'var(--red)') + '">' + (r.ok ? 'OK' : 'FAIL') + '</td></tr>').join('')}}
         </table>
       </div>
@@ -2646,16 +2688,16 @@ function renderStabilityCards(s) {{
     const dlSpeed = lastDl ? lastDl.speed_mbps : null;
     const ulSpeed = lastUl ? lastUl.speed_mbps : null;
     html += `<div class="card">
-      <h2>Speed &amp; Routing</h2>
+      <h2>${{t('speed_routing')}}</h2>
       <div class="grid grid-4">
-        <div class="metric"><div class="num">${{dlSpeed || '-'}}${{ratingBadge('download', dlSpeed)}}</div><div class="lbl">download (Mbps) ${{infoTip('download')}}</div></div>
-        <div class="metric"><div class="num">${{ulSpeed || '-'}}${{ratingBadge('upload', ulSpeed)}}</div><div class="lbl">upload (Mbps) ${{infoTip('upload')}}</div></div>
-        <div class="metric"><div class="num" style="color:${{rcColor}}">${{s.route_changes || 0}}${{ratingBadge('route_changes', s.route_changes || 0)}}</div><div class="lbl">route changes ${{infoTip('route_changes')}}</div></div>
-        <div class="metric"><div class="num">${{dl.length + ul.length}}</div><div class="lbl">speed tests</div></div>
+        <div class="metric"><div class="num">${{dlSpeed || '-'}}${{ratingBadge('download', dlSpeed)}}</div><div class="lbl">${{t('download_mbps')}} ${{infoTip('download')}}</div></div>
+        <div class="metric"><div class="num">${{ulSpeed || '-'}}${{ratingBadge('upload', ulSpeed)}}</div><div class="lbl">${{t('upload_mbps')}} ${{infoTip('upload')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{rcColor}}">${{s.route_changes || 0}}${{ratingBadge('route_changes', s.route_changes || 0)}}</div><div class="lbl">${{t('route_changes')}} ${{infoTip('route_changes')}}</div></div>
+        <div class="metric"><div class="num">${{dl.length + ul.length}}</div><div class="lbl">${{t('speed_tests')}}</div></div>
       </div>`;
     if (lastDl && lastDl.dns_ms != null) {{
       html += `<div style="margin-top:10px;font-size:0.82em">
-        <b>TCP Timing (last):</b>
+        <b>${{t('tcp_timing')}}</b>
         DNS ${{lastDl.dns_ms}}ms ${{ratingBadge('dns', lastDl.dns_ms)}} |
         TCP ${{lastDl.connect_ms}}ms ${{ratingBadge('tcp', lastDl.connect_ms)}} ${{infoTip('tcp')}} |
         TLS ${{lastDl.tls_ms}}ms ${{ratingBadge('tls', lastDl.tls_ms)}} ${{infoTip('tls')}} |
