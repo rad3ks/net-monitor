@@ -33,6 +33,7 @@ import signal
 import argparse
 import math
 import socket
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
@@ -902,10 +903,14 @@ def estimate_speed():
                 "http_code": parts[2],
             }
             if len(parts) >= 7:
-                result["dns_ms"] = round(float(parts[3]) * 1000, 1)
-                result["connect_ms"] = round(float(parts[4]) * 1000, 1)
-                result["tls_ms"] = round(float(parts[5]) * 1000, 1)
-                result["ttfb_ms"] = round(float(parts[6]) * 1000, 1)
+                t_dns = float(parts[3])
+                t_conn = float(parts[4])
+                t_tls = float(parts[5])
+                t_ttfb = float(parts[6])
+                result["dns_ms"] = round(t_dns * 1000, 1)
+                result["connect_ms"] = round((t_conn - t_dns) * 1000, 1)
+                result["tls_ms"] = round((t_tls - t_conn) * 1000, 1)
+                result["ttfb_ms"] = round((t_ttfb - t_tls) * 1000, 1)
             return result
     except Exception:
         pass
@@ -917,7 +922,6 @@ UPLOAD_TEST_SIZE = 2_000_000  # 2MB
 
 def estimate_upload_speed():
     """Upload speed test using Cloudflare endpoint."""
-    import tempfile
     tmp_path = None
     try:
         # Generate random payload to temp file
@@ -925,7 +929,7 @@ def estimate_upload_speed():
             tmp.write(os.urandom(UPLOAD_TEST_SIZE))
             tmp_path = tmp.name
         url = "https://speed.cloudflare.com/__up"
-        cmd = ["curl", "-s", "-X", "POST", "-F", f"file=@{tmp_path}", "-w",
+        cmd = ["curl", "-s", "-T", tmp_path, "-w",
                "%{speed_upload} %{time_total} %{http_code}",
                "-o", "NUL" if IS_WINDOWS else "/dev/null",
                "--max-time", "30", url]
@@ -952,18 +956,26 @@ def estimate_upload_speed():
 DNS_TEST_DOMAINS = ["google.com", "cloudflare.com", "amazon.com"]
 
 
+DNS_TIMEOUT = 3  # seconds
+
+
 def test_dns_resolution():
-    """Measure DNS resolution time using system resolver."""
+    """Measure DNS resolution time using system resolver (with timeout)."""
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(DNS_TIMEOUT)
     results = []
-    for domain in DNS_TEST_DOMAINS:
-        start = time.time()
-        try:
-            socket.getaddrinfo(domain, 80, socket.AF_INET)
-            elapsed_ms = (time.time() - start) * 1000
-            results.append({"domain": domain, "time_ms": round(elapsed_ms, 1), "ok": True})
-        except socket.gaierror:
-            elapsed_ms = (time.time() - start) * 1000
-            results.append({"domain": domain, "time_ms": round(elapsed_ms, 1), "ok": False})
+    try:
+        for domain in DNS_TEST_DOMAINS:
+            start = time.time()
+            try:
+                socket.getaddrinfo(domain, 80, socket.AF_INET)
+                elapsed_ms = (time.time() - start) * 1000
+                results.append({"domain": domain, "time_ms": round(elapsed_ms, 1), "ok": True})
+            except OSError:
+                elapsed_ms = (time.time() - start) * 1000
+                results.append({"domain": domain, "time_ms": round(elapsed_ms, 1), "ok": False})
+    finally:
+        socket.setdefaulttimeout(old_timeout)
     return results
 
 
@@ -2613,16 +2625,21 @@ def monitor():
             # --- DNS resolution test ---
             dns_results = test_dns_resolution()
             if dns_results:
-                avg_dns = sum(r["time_ms"] for r in dns_results if r["ok"]) / max(1, sum(1 for r in dns_results if r["ok"]))
-                log_event("dns_test", {"cycle": cycle, "results": dns_results, "avg_ms": round(avg_dns, 1)})
                 dns_ok = [r for r in dns_results if r["ok"]]
+                avg_dns = sum(r["time_ms"] for r in dns_ok) / len(dns_ok) if dns_ok else None
+                log_event("dns_test", {
+                    "cycle": cycle, "results": dns_results,
+                    "avg_ms": round(avg_dns, 1) if avg_dns is not None else None,
+                })
                 if dns_ok:
                     dns_max = max(r["time_ms"] for r in dns_ok)
                     color = RED if dns_max > 100 else (YELLOW if dns_max > 50 else GREEN)
-                    print(f"  {DIM}DNS: avg {avg_dns:.0f}ms, max {dns_max:.0f}ms{RESET}", end="")
+                    print(f"  {color}DNS: avg {avg_dns:.0f}ms, max {dns_max:.0f}ms{RESET}", end="")
                     if dns_max > 100:
                         print(f"  {RED}(slow!){RESET}", end="")
                     print()
+                else:
+                    print(f"  {RED}DNS: all lookups failed{RESET}")
 
             # --- Quick ping targets (batch) ---
             ping_ok = 0
