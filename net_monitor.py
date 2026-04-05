@@ -972,14 +972,16 @@ def test_dns_resolution():
     results = []
     for domain in DNS_TEST_DOMAINS:
         start = time.time()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(_resolve_domain, domain)
-                ms = fut.result(timeout=DNS_TIMEOUT)
+            fut = executor.submit(_resolve_domain, domain)
+            ms = fut.result(timeout=DNS_TIMEOUT)
             results.append({"domain": domain, "time_ms": ms, "ok": True})
         except (concurrent.futures.TimeoutError, OSError):
             elapsed_ms = round((time.time() - start) * 1000, 1)
             results.append({"domain": domain, "time_ms": elapsed_ms, "ok": False})
+        finally:
+            executor.shutdown(wait=False)
     return results
 
 
