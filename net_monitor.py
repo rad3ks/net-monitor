@@ -2575,7 +2575,7 @@ def monitor():
                             "cycle": cycle,
                             "old_route": old_route, "new_route": new_route,
                         })
-                        print(f"  {YELLOW}Zmiana trasy do {name}!{RESET}")
+                        print(f"  {YELLOW}Route change to {name}!{RESET}")
                 if new_route:
                     previous_routes[name] = new_route
                 cycle_ok += result["ok_runs"]
@@ -2598,7 +2598,7 @@ def monitor():
                     color = RED if dns_max > 100 else (YELLOW if dns_max > 50 else GREEN)
                     print(f"  {DIM}DNS: avg {avg_dns:.0f}ms, max {dns_max:.0f}ms{RESET}", end="")
                     if dns_max > 100:
-                        print(f"  {RED}(powolny!){RESET}", end="")
+                        print(f"  {RED}(slow!){RESET}", end="")
                     print()
 
             # --- Quick ping targets (batch) ---
