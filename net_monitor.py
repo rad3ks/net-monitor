@@ -1926,11 +1926,10 @@ def _check_monitor_status():
                 "session": active_session,
             }
             # Read live progress if available
-            if LIVE_STATUS.exists():
-                try:
-                    result["live"] = json.loads(LIVE_STATUS.read_text())
-                except (json.JSONDecodeError, OSError):
-                    pass
+            try:
+                result["live"] = json.loads(LIVE_STATUS.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
             return result
         else:
             return {"running": False}
@@ -2066,7 +2065,7 @@ def _build_dashboard_html(data_json, days, live=False):
       doRefresh();
     } else {
       var ago = POLL_SEC - countdown;
-      var label = ago < 2 ? '&#8635; ' + t('updated') : '&#8635; ' + t('updated') + ' ' + ago + 's ' + t('ago');
+      var label = ago < 1 ? '&#8635; ' + t('updated') : '&#8635; ' + t('updated') + ' ' + ago + 's ' + t('ago');
       updateBtn(label, ago < 10 ? 'var(--green)' : 'var(--fg2)');
     }
   }, 1000);
@@ -2817,7 +2816,7 @@ function renderStatusBar() {{
     bar.style.background = '#0d1117';
     bar.style.color = '#3fb950';
     var info = '\u25cf ' + t('monitoring_active') + ' &mdash; PID ' + MONITOR.pid
-      + (MONITOR.session ? ' | session: ' + MONITOR.session : '');
+      + (MONITOR.session ? ' | session: ' + escHtml(MONITOR.session) : '');
     if (MONITOR.live) {{
       var lv = MONITOR.live;
       var pct = lv.total_runs > 0 ? Math.round(lv.run / lv.total_runs * 100) : 0;
@@ -2825,7 +2824,7 @@ function renderStatusBar() {{
         ? ' | <span style="color:var(--green)">' + lv.ok + ' OK</span>'
           + (lv.fail > 0 ? ' <span style="color:var(--red)">' + lv.fail + ' FAIL</span>' : '')
         : '';
-      info += ' | cycle #' + lv.cycle + ' \u2192 ' + lv.target
+      info += ' | cycle #' + lv.cycle + ' \u2192 ' + escHtml(lv.target)
         + ' [run ' + lv.run + '/' + lv.total_runs + ' \u2014 ' + pct + '%]' + dots;
     }}
     bar.innerHTML = info;
@@ -3190,8 +3189,8 @@ def monitor():
         print(f"\n{RED}Error: {e}{RESET}")
         import traceback
         traceback.print_exc()
+    finally:
         clear_live_status()
-        release_lock()
 
     # --- Graceful shutdown ---
     elapsed = time.time() - session_start
@@ -3221,7 +3220,6 @@ def monitor():
     })
 
     print_session_summary(cycle, elapsed, stats, drop_time, uptime)
-    clear_live_status()
     release_lock()
 
 
