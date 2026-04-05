@@ -12,7 +12,7 @@ CLI tool that continuously monitors your internet connection quality and builds 
 # Prerequisites: Python 3.8+ (preinstalled), traceroute (preinstalled), curl (preinstalled)
 
 # Clone and run
-git clone https://github.com/rszeja/net-monitor.git
+git clone https://github.com/rad3ks/net-monitor.git
 cd net-monitor
 sudo python3 net_monitor.py
 ```
@@ -21,16 +21,35 @@ sudo python3 net_monitor.py
 
 ### Windows
 
-```powershell
-# Prerequisites: Python 3.8+ (python.org or winget), tracert (built-in), curl (built-in since Win10 1803)
+**Wymagania:**
+- Python 3.8+ — [python.org](https://www.python.org/downloads/) lub `winget install Python.Python.3.12`
+- Git — [git-scm.com](https://git-scm.com/download/win) lub `winget install Git.Git`
+- `tracert`, `ping`, `curl` — wbudowane w Windows 10+
 
-# Clone and run
-git clone https://github.com/rszeja/net-monitor.git
+**Instalacja i uruchomienie:**
+
+1. Otwórz **PowerShell jako Administrator** (prawy klik na Start > "Terminal (Admin)" lub "Windows PowerShell (Admin)")
+
+2. Wybierz folder i sklonuj repo:
+```powershell
+cd ~\Documents
+git clone https://github.com/rad3ks/net-monitor.git
 cd net-monitor
+```
+
+3. Uruchom monitoring:
+```powershell
 python net_monitor.py
 ```
 
-> Run **as Administrator** — `tracert` and TTL-based `ping` may need elevated privileges.
+4. Zatrzymaj: `Ctrl+C` — wyswietli podsumowanie sesji
+
+5. Wygeneruj dashboard:
+```powershell
+python net_monitor.py --dashboard
+```
+
+> **Uwaga:** Uruchomienie jako Administrator jest wymagane — `tracert` i `ping` z niestandardowym TTL potrzebuja podwyzszonych uprawnien.
 
 ### Linux
 
