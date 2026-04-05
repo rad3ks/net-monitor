@@ -2105,6 +2105,10 @@ tr:hover td {{ background: var(--bg3); }}
 }}
 .toggle-arrow {{ transition: transform 0.2s; display: inline-block; }}
 .toggle-arrow.open {{ transform: rotate(90deg); }}
+.info-btn {{ display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:var(--bg3);color:var(--fg2);font-size:10px;font-style:italic;font-weight:700;cursor:pointer;margin-left:4px;border:1px solid var(--fg3);vertical-align:middle;user-select:none; }}
+.info-btn:hover {{ background:var(--fg3);color:var(--fg); }}
+.info-popup {{ display:none;position:absolute;z-index:50;background:var(--bg2);border:1px solid var(--fg3);border-radius:6px;padding:8px 12px;font-size:0.78em;color:var(--fg2);max-width:320px;line-height:1.4;margin-top:4px;box-shadow:0 4px 12px rgba(0,0,0,0.4); }}
+.info-popup.show {{ display:block; }}
 </style>
 </head>
 <body>
@@ -2135,6 +2139,72 @@ const ZONE_COLORS = {{
 }};
 
 function zc(zone) {{ return ZONE_COLORS[zone] || '#484f58'; }}
+
+// ── Metric info tooltips + ratings ──
+const METRIC_INFO = {{
+  rtt: {{
+    en: 'Round-trip time — how long a packet takes to reach the target and return. Lower is better. High RTT means slow connection.',
+    pl: 'Czas podrozy pakietu do celu i z powrotem. Im nizszy tym lepiej. Wysoki RTT = wolne polaczenie.',
+    rate: (v) => v < 30 ? ['good','var(--green)'] : v < 60 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  jitter: {{
+    en: 'Variation in packet delay between consecutive probes. High jitter causes VoIP/video stuttering. UKE considers >30ms problematic.',
+    pl: 'Zmiennosc opoznienia miedzy kolejnymi probami. Wysoki jitter powoduje zacinanie rozmow/wideo. UKE uznaje >30ms za problem.',
+    rate: (v) => v < 10 ? ['good','var(--green)'] : v < 30 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  dns: {{
+    en: 'Time to resolve a domain name to IP address. Slow DNS causes page load delays. ISP DNS >100ms is considered poor.',
+    pl: 'Czas zamiany nazwy domeny na adres IP. Wolny DNS opoznia ladowanie stron. DNS ISP >100ms to slaby wynik.',
+    rate: (v) => v < 30 ? ['good','var(--green)'] : v < 100 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  download: {{
+    en: 'Download speed measured via 10MB Cloudflare edge transfer. Reflects real-world throughput, not advertised speed.',
+    pl: 'Predkosc pobierania mierzona transferem 10MB z Cloudflare. Odzwierciedla realna przepustowosc, nie deklarowana.',
+    rate: (v) => v > 50 ? ['good','var(--green)'] : v > 10 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  upload: {{
+    en: 'Upload speed measured via 2MB Cloudflare transfer. Important for video calls, file sharing, and cloud backups.',
+    pl: 'Predkosc wysylania mierzona transferem 2MB do Cloudflare. Wazna dla wideorozmow, udostepniania plikow i backupow.',
+    rate: (v) => v > 20 ? ['good','var(--green)'] : v > 5 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  route_changes: {{
+    en: 'Number of times the network path to the target changed during monitoring. Frequent changes indicate ISP routing instability.',
+    pl: 'Ile razy trasa do celu zmienila sie podczas monitorowania. Czeste zmiany = niestabilny routing ISP.',
+    rate: (v) => v === 0 ? ['good','var(--green)'] : v <= 3 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  tcp: {{
+    en: 'TCP handshake time — the delay to establish a connection. High values suggest network congestion or ISP throttling.',
+    pl: 'Czas nawiazania polaczenia TCP. Wysokie wartosci sugeruja przeciazenie sieci lub throttling ISP.',
+    rate: (v) => v < 50 ? ['good','var(--green)'] : v < 150 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  tls: {{
+    en: 'TLS handshake time — encryption setup delay. Depends on server distance and network latency.',
+    pl: 'Czas nawiazania szyfrowania TLS. Zalezy od odleglosci serwera i opoznienia sieci.',
+    rate: (v) => v < 100 ? ['good','var(--green)'] : v < 200 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+  ttfb: {{
+    en: 'Time to First Byte — delay from request sent to first byte received. Includes server processing time.',
+    pl: 'Czas do pierwszego bajtu — od wyslania zapytania do otrzymania odpowiedzi. Obejmuje czas przetwarzania serwera.',
+    rate: (v) => v < 100 ? ['good','var(--green)'] : v < 300 ? ['ok','var(--yellow)'] : ['bad','var(--red)'],
+  }},
+}};
+
+var _infoLang = (navigator.language || 'en').startsWith('pl') ? 'pl' : 'en';
+
+function infoTip(key) {{
+  const m = METRIC_INFO[key];
+  if (!m) return '';
+  const txt = m[_infoLang] || m.en;
+  return `<span class="info-btn" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')">i</span><span class="info-popup">${{txt}}</span>`;
+}}
+
+function ratingBadge(key, value) {{
+  const m = METRIC_INFO[key];
+  if (!m || value == null || value === '-') return '';
+  const [label, color] = m.rate(parseFloat(value));
+  const labels = {{ good: _infoLang==='pl'?'OK':'good', ok: _infoLang==='pl'?'sredni':'fair', bad: _infoLang==='pl'?'zly':'poor' }};
+  return `<span style="display:inline-block;font-size:0.7em;padding:1px 6px;border-radius:3px;margin-left:4px;background:${{color}};color:#000;font-weight:600">${{labels[label] || label}}</span>`;
+}}
 
 // ── Pie chart (canvas) ──
 function drawPie(canvasId, slices) {{
@@ -2479,8 +2549,8 @@ function renderStabilityCards(s) {{
     html += `<div class="card">
       <h2>Latency &amp; Jitter</h2>
       <div class="grid grid-4">
-        <div class="metric"><div class="num">${{avgRtt}}</div><div class="lbl">avg RTT (ms)</div></div>
-        <div class="metric"><div class="num" style="color:${{jColor}}">${{avgJitter}}</div><div class="lbl">avg jitter (ms)</div></div>
+        <div class="metric"><div class="num">${{avgRtt}}${{ratingBadge('rtt', avgRtt)}}</div><div class="lbl">avg RTT (ms) ${{infoTip('rtt')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{jColor}}">${{avgJitter}}${{ratingBadge('jitter', avgJitter)}}</div><div class="lbl">avg jitter (ms) ${{infoTip('jitter')}}</div></div>
         <div class="metric"><div class="num" style="color:${{jColor}}">${{maxJitter}}</div><div class="lbl">max jitter (ms)</div></div>
         <div class="metric"><div class="num">${{rtt.length}}</div><div class="lbl">samples</div></div>
       </div>
@@ -2508,7 +2578,7 @@ function renderStabilityCards(s) {{
     html += `<div class="card">
       <h2>DNS Resolution</h2>
       <div class="grid grid-3">
-        <div class="metric"><div class="num" style="color:${{dnsColor}}">${{overallAvg}}</div><div class="lbl">avg DNS (ms)</div></div>
+        <div class="metric"><div class="num" style="color:${{dnsColor}}">${{overallAvg}}${{ratingBadge('dns', overallAvg)}}</div><div class="lbl">avg DNS (ms) ${{infoTip('dns')}}</div></div>
         <div class="metric"><div class="num" style="color:${{dnsColor}}">${{maxDns}}</div><div class="lbl">max avg (ms)</div></div>
         <div class="metric"><div class="num">${{dns.length}}</div><div class="lbl">tests</div></div>
       </div>
@@ -2528,17 +2598,19 @@ function renderStabilityCards(s) {{
     const lastDl = dl.length ? dl[dl.length - 1] : null;
     const lastUl = ul.length ? ul[ul.length - 1] : null;
     const rcColor = s.route_changes > 5 ? 'var(--red)' : s.route_changes > 0 ? 'var(--yellow)' : 'var(--green)';
+    const dlSpeed = lastDl ? lastDl.speed_mbps : null;
+    const ulSpeed = lastUl ? lastUl.speed_mbps : null;
     html += `<div class="card">
       <h2>Speed &amp; Routing</h2>
       <div class="grid grid-4">
-        <div class="metric"><div class="num">${{lastDl ? lastDl.speed_mbps : '-'}}</div><div class="lbl">download (Mbps)</div></div>
-        <div class="metric"><div class="num">${{lastUl ? lastUl.speed_mbps : '-'}}</div><div class="lbl">upload (Mbps)</div></div>
-        <div class="metric"><div class="num" style="color:${{rcColor}}">${{s.route_changes || 0}}</div><div class="lbl">route changes</div></div>
+        <div class="metric"><div class="num">${{dlSpeed || '-'}}${{ratingBadge('download', dlSpeed)}}</div><div class="lbl">download (Mbps) ${{infoTip('download')}}</div></div>
+        <div class="metric"><div class="num">${{ulSpeed || '-'}}${{ratingBadge('upload', ulSpeed)}}</div><div class="lbl">upload (Mbps) ${{infoTip('upload')}}</div></div>
+        <div class="metric"><div class="num" style="color:${{rcColor}}">${{s.route_changes || 0}}${{ratingBadge('route_changes', s.route_changes || 0)}}</div><div class="lbl">route changes ${{infoTip('route_changes')}}</div></div>
         <div class="metric"><div class="num">${{dl.length + ul.length}}</div><div class="lbl">speed tests</div></div>
       </div>`;
     if (lastDl && lastDl.dns_ms != null) {{
       html += `<div style="margin-top:10px;font-size:0.82em">
-        <b>TCP Timing (last):</b> DNS ${{lastDl.dns_ms}}ms | TCP ${{lastDl.connect_ms}}ms | TLS ${{lastDl.tls_ms}}ms | TTFB ${{lastDl.ttfb_ms}}ms
+        <b>TCP Timing (last):</b> DNS ${{lastDl.dns_ms}}ms ${{ratingBadge('dns', lastDl.dns_ms)}} | TCP ${{lastDl.connect_ms}}ms ${{ratingBadge('tcp', lastDl.connect_ms)}} | TLS ${{lastDl.tls_ms}}ms ${{ratingBadge('tls', lastDl.tls_ms)}} | TTFB ${{lastDl.ttfb_ms}}ms ${{ratingBadge('ttfb', lastDl.ttfb_ms)}}
       </div>`;
     }}
     html += '</div>';
@@ -2566,6 +2638,13 @@ function renderStatusBar() {{
     bar.style.display = 'none';
   }}
 }}
+
+// ── Close info popups on click outside ──
+document.addEventListener('click', function(e) {{
+  if (!e.target.classList.contains('info-btn')) {{
+    document.querySelectorAll('.info-popup.show').forEach(p => p.classList.remove('show'));
+  }}
+}});
 
 // ── Init ──
 renderSidebar();
