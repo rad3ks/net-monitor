@@ -2031,7 +2031,7 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
 @media(max-width:900px) {{ .grid-2,.grid-3,.grid-4 {{ grid-template-columns:1fr; }} }}
 .metric {{ text-align: center; padding: 12px; }}
 .metric .num {{ font-size: 1.8em; font-weight: bold; line-height: 1.2; }}
-.metric .lbl {{ font-size: 0.78em; color: var(--fg2); }}
+.metric .lbl {{ font-size: 0.78em; color: var(--fg2); position: relative; }}
 table {{ width: 100%; border-collapse: collapse; font-size: 0.85em; }}
 th {{ text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--border);
   color: var(--fg2); font-weight: 600; }}
@@ -2105,9 +2105,10 @@ tr:hover td {{ background: var(--bg3); }}
 }}
 .toggle-arrow {{ transition: transform 0.2s; display: inline-block; }}
 .toggle-arrow.open {{ transform: rotate(90deg); }}
-.info-btn {{ display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:var(--bg3);color:var(--fg2);font-size:10px;font-style:italic;font-weight:700;cursor:pointer;margin-left:4px;border:1px solid var(--fg3);vertical-align:middle;user-select:none; }}
+.info-wrap {{ display:inline;position:relative; }}
+.info-btn {{ display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--bg3);color:var(--fg2);font-size:9px;font-style:italic;font-weight:700;cursor:pointer;margin-left:3px;border:1px solid var(--fg3);vertical-align:middle;user-select:none; }}
 .info-btn:hover {{ background:var(--fg3);color:var(--fg); }}
-.info-popup {{ display:none;position:absolute;z-index:50;background:var(--bg2);border:1px solid var(--fg3);border-radius:6px;padding:8px 12px;font-size:0.78em;color:var(--fg2);max-width:320px;line-height:1.4;margin-top:4px;box-shadow:0 4px 12px rgba(0,0,0,0.4); }}
+.info-popup {{ display:none;position:absolute;left:50%;transform:translateX(-50%);bottom:calc(100% + 6px);z-index:50;background:#1c2128;border:1px solid var(--fg3);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--fg);max-width:300px;min-width:200px;line-height:1.4;box-shadow:0 4px 16px rgba(0,0,0,0.5);text-align:left;white-space:normal;font-weight:400; }}
 .info-popup.show {{ display:block; }}
 </style>
 </head>
@@ -2195,7 +2196,7 @@ function infoTip(key) {{
   const m = METRIC_INFO[key];
   if (!m) return '';
   const txt = m[_infoLang] || m.en;
-  return `<span class="info-btn" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')">i</span><span class="info-popup">${{txt}}</span>`;
+  return `<span class="info-wrap"><span class="info-btn" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')">i</span><span class="info-popup">${{txt}}</span></span>`;
 }}
 
 function ratingBadge(key, value) {{
@@ -2610,7 +2611,11 @@ function renderStabilityCards(s) {{
       </div>`;
     if (lastDl && lastDl.dns_ms != null) {{
       html += `<div style="margin-top:10px;font-size:0.82em">
-        <b>TCP Timing (last):</b> DNS ${{lastDl.dns_ms}}ms ${{ratingBadge('dns', lastDl.dns_ms)}} | TCP ${{lastDl.connect_ms}}ms ${{ratingBadge('tcp', lastDl.connect_ms)}} | TLS ${{lastDl.tls_ms}}ms ${{ratingBadge('tls', lastDl.tls_ms)}} | TTFB ${{lastDl.ttfb_ms}}ms ${{ratingBadge('ttfb', lastDl.ttfb_ms)}}
+        <b>TCP Timing (last):</b>
+        DNS ${{lastDl.dns_ms}}ms ${{ratingBadge('dns', lastDl.dns_ms)}} |
+        TCP ${{lastDl.connect_ms}}ms ${{ratingBadge('tcp', lastDl.connect_ms)}} ${{infoTip('tcp')}} |
+        TLS ${{lastDl.tls_ms}}ms ${{ratingBadge('tls', lastDl.tls_ms)}} ${{infoTip('tls')}} |
+        TTFB ${{lastDl.ttfb_ms}}ms ${{ratingBadge('ttfb', lastDl.ttfb_ms)}} ${{infoTip('ttfb')}}
       </div>`;
     }}
     html += '</div>';
