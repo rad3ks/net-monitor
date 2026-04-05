@@ -63,6 +63,7 @@ STATS_EVERY_N_CYCLES = 5
 DATA_DIR = Path.home() / ".net_monitor"
 OUTPUT_DIR = DATA_DIR / "output"
 REPORT_DIR = DATA_DIR / "reports"
+LIVE_STATUS = DATA_DIR / "live_status.json"
 
 # Per-session paths — set in setup_session_dir()
 SESSION_DIR = None
@@ -766,6 +767,44 @@ def log_event(event_type, data):
         pass
 
 
+def update_live_status(cycle, target_name, run_num, total_runs, result,
+                       ok_runs, fail_runs, faults=None, rtt_samples=None):
+    """Write ephemeral live status file for dashboard real-time progress.
+    Uses atomic rename to prevent partial reads."""
+    rtt_stats = {}
+    if rtt_samples:
+        n = len(rtt_samples)
+        avg = sum(rtt_samples) / n
+        rtt_stats = {"min": round(min(rtt_samples), 1), "avg": round(avg, 1),
+                     "max": round(max(rtt_samples), 1), "n": n}
+    status = {
+        "ts": ts_iso(),
+        "cycle": cycle,
+        "target": target_name,
+        "run": run_num,
+        "total_runs": total_runs,
+        "result": result,
+        "ok": ok_runs,
+        "fail": fail_runs,
+        "faults": faults or [],
+        "rtt_stats": rtt_stats,
+    }
+    try:
+        tmp = LIVE_STATUS.with_suffix(".tmp")
+        tmp.write_text(json.dumps(status, default=str))
+        tmp.rename(LIVE_STATUS)
+    except OSError:
+        pass
+
+
+def clear_live_status():
+    """Remove live status file."""
+    try:
+        LIVE_STATUS.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def init_csv():
     files_headers = {
         HOP_LOG: [
@@ -1152,6 +1191,10 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
 
         sys.stdout.flush()
 
+        update_live_status(cycle_num, target_name, run_num, RUNS_PER_TARGET,
+                           run_result or "?", ok_runs, fail_runs,
+                           faults=faults, rtt_samples=rtt_samples)
+
         # Pause between runs
         if run_idx < RUNS_PER_TARGET - 1 and not shutdown_check():
             time.sleep(PAUSE_BETWEEN_RUNS)
@@ -1241,6 +1284,7 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
         "hop_failed": dict(hop_failed),
         "failed_runs_detail": failed_runs_detail,
     })
+    clear_live_status()  # prevent double-counting with injected live data
 
     # --- Log incidents ---
     if fail_runs > 0:
@@ -1787,6 +1831,47 @@ def _build_dashboard_data(days=30):
         }
         session_summaries.append(summary)
 
+    # Inject live progress into the active session
+    if session_summaries:
+        try:
+            live = json.loads(LIVE_STATUS.read_text())
+            # Ignore stale status (e.g. after crash) — max 60s old
+            live_ts = live.get("ts", "")
+            if live_ts and (datetime.now() - datetime.fromisoformat(live_ts)).total_seconds() > 60:
+                live = None
+        except (json.JSONDecodeError, OSError, ValueError):
+            live = None
+        if live:
+            last = session_summaries[-1]
+            # Add as in-progress timeline entry
+            last["timeline"].append({
+                "ts": live.get("ts", ""),
+                "ok": live.get("ok", 0),
+                "fail": live.get("fail", 0),
+                "target": live.get("target", "?"),
+                "in_progress": True,
+                "run": live.get("run", 0),
+                "total_runs": live.get("total_runs", 0),
+            })
+            # Add to session totals
+            last["total_runs"] += live.get("ok", 0) + live.get("fail", 0)
+            last["ok_runs"] += live.get("ok", 0)
+            last["fail_runs"] += live.get("fail", 0)
+            if last["total_runs"] > 0:
+                last["success_pct"] = round(last["ok_runs"] / last["total_runs"] * 100, 1)
+            # Add faults to zone_faults
+            for f in live.get("faults", []):
+                zone = f.get("zone", "?")
+                last["zone_faults"][zone] = last["zone_faults"].get(zone, 0) + 1
+            # Add rtt_stats
+            rtt_data = live.get("rtt_stats")
+            if rtt_data and rtt_data.get("n", 0) > 0:
+                last["rtt_stats"].append({
+                    **rtt_data,
+                    "target": live.get("target", "?"),
+                    "ts": live.get("ts", ""),
+                })
+
     return session_summaries
 
 
@@ -1835,11 +1920,18 @@ def _check_monitor_status():
                 )
                 if dirs:
                     active_session = dirs[0].name
-            return {
+            result = {
                 "running": True,
                 "pid": pid,
                 "session": active_session,
             }
+            # Read live progress if available
+            if LIVE_STATUS.exists():
+                try:
+                    result["live"] = json.loads(LIVE_STATUS.read_text())
+                except (json.JSONDecodeError, OSError):
+                    pass
+            return result
         else:
             return {"running": False}
     except (ValueError, OSError):
@@ -1894,7 +1986,7 @@ def live_dashboard(days=30, port=8077):
     url = f"http://localhost:{port}"
     print(f"\n{BOLD}Net Monitor — Live Dashboard{RESET}")
     print(f"{GREEN}  {url}{RESET}")
-    print(f"{DIM}  Auto-refresh co 5s | Ctrl+C aby zatrzymac{RESET}\n")
+    print(f"{DIM}  Auto-refresh co 10s | Ctrl+C aby zatrzymac{RESET}\n")
 
     import webbrowser
     webbrowser.open(url)
@@ -1917,7 +2009,7 @@ def _build_dashboard_html(data_json, days, live=False):
         live_js = """
 // ── Live auto-refresh ──
 (function() {
-  var POLL_SEC = 5;
+  var POLL_SEC = 10;
   var countdown = POLL_SEC;
   var polling = false;
 
@@ -1973,7 +2065,9 @@ def _build_dashboard_html(data_json, days, live=False):
     if (countdown <= 0) {
       doRefresh();
     } else {
-      updateBtn('&#9679; LIVE ' + countdown + 's', 'var(--green)');
+      var ago = POLL_SEC - countdown;
+      var label = ago < 2 ? '&#8635; ' + t('updated') : '&#8635; ' + t('updated') + ' ' + ago + 's ' + t('ago');
+      updateBtn(label, ago < 10 ? 'var(--green)' : 'var(--fg2)');
     }
   }, 1000);
 })();
@@ -2001,7 +2095,7 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
   border-right: 1px solid var(--border); overflow-y: auto;
   padding: 16px 0;
 }}
-.sidebar h1 {{ font-size: 1em; color: var(--blue); padding: 0 16px 0; }}
+.sidebar h1 {{ font-size: 1em; color: var(--blue); padding: 0; }}
 .session-btn {{
   display: block; width: 100%; padding: 10px 16px;
   background: none; border: none; border-left: 3px solid transparent;
@@ -2120,10 +2214,10 @@ tr:hover td {{ background: var(--bg3); }}
 <div class="layout">
 
 <div class="sidebar" id="sidebar">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:0 16px">
     <h1 style="margin:0">Net Monitor</h1>
     <div style="display:flex;gap:6px;align-items:center">
-      <button id="live-btn" title="Click to refresh" style="font-size:0.7em;background:var(--bg3);color:var(--green);border:1px solid var(--green);border-radius:3px;padding:2px 8px;cursor:pointer;display:none">&#9679; LIVE</button>
+      <button id="live-btn" title="Click to refresh" style="font-size:0.7em;background:var(--bg3);color:var(--green);border:1px solid var(--green);border-radius:3px;padding:2px 8px;cursor:pointer;display:none">&#8635; Updated</button>
       <button id="lang-btn" onclick="toggleLang()" style="font-size:0.7em;background:var(--bg3);color:var(--fg2);border:1px solid var(--fg3);border-radius:3px;padding:2px 8px;cursor:pointer"></button>
     </div>
   </div>
@@ -2159,7 +2253,8 @@ const I18N = {{
     raw_logs: 'Raw ping logs per hop:', samples: 'Samples',
     monitoring_active: 'Monitoring active', monitoring_inactive: 'Monitoring inactive',
     timeline: 'Timeline',
-    refreshing: 'refreshing...', offline: 'OFFLINE',
+    refreshing: 'Refreshing...', offline: 'OFFLINE',
+    updated: 'Updated', ago: 'ago',
     // connection info
     iface: 'Interface', ip: 'IP', gateway: 'Gateway',
     ssid: 'SSID', signal: 'Signal', channel: 'Channel', phy: 'PHY',
@@ -2194,7 +2289,8 @@ const I18N = {{
     raw_logs: 'Surowe logi ping per hop:', samples: 'Punkt\u00f3w',
     monitoring_active: 'Monitoring aktywny', monitoring_inactive: 'Monitoring nieaktywny',
     timeline: 'Timeline',
-    refreshing: 'od\u015bwie\u017canie...', offline: 'OFFLINE',
+    refreshing: 'Od\u015bwie\u017canie...', offline: 'OFFLINE',
+    updated: 'Zaktualizowano', ago: 'temu',
     // connection info
     iface: 'Interfejs', ip: 'IP', gateway: 'Brama',
     ssid: 'SSID', signal: 'Sygna\u0142', channel: 'Kana\u0142', phy: 'PHY',
@@ -2720,8 +2816,19 @@ function renderStatusBar() {{
     bar.style.display = 'block';
     bar.style.background = '#0d1117';
     bar.style.color = '#3fb950';
-    bar.innerHTML = '\u25cf ' + t('monitoring_active') + ' &mdash; PID ' + MONITOR.pid
+    var info = '\u25cf ' + t('monitoring_active') + ' &mdash; PID ' + MONITOR.pid
       + (MONITOR.session ? ' | session: ' + MONITOR.session : '');
+    if (MONITOR.live) {{
+      var lv = MONITOR.live;
+      var pct = lv.total_runs > 0 ? Math.round(lv.run / lv.total_runs * 100) : 0;
+      var dots = lv.ok > 0 || lv.fail > 0
+        ? ' | <span style="color:var(--green)">' + lv.ok + ' OK</span>'
+          + (lv.fail > 0 ? ' <span style="color:var(--red)">' + lv.fail + ' FAIL</span>' : '')
+        : '';
+      info += ' | cycle #' + lv.cycle + ' \u2192 ' + lv.target
+        + ' [run ' + lv.run + '/' + lv.total_runs + ' \u2014 ' + pct + '%]' + dots;
+    }}
+    bar.innerHTML = info;
   }} else if (Object.keys(MONITOR).length) {{
     bar.style.display = 'block';
     bar.style.background = '#0d1117';
@@ -3083,6 +3190,7 @@ def monitor():
         print(f"\n{RED}Error: {e}{RESET}")
         import traceback
         traceback.print_exc()
+        clear_live_status()
         release_lock()
 
     # --- Graceful shutdown ---
@@ -3113,6 +3221,7 @@ def monitor():
     })
 
     print_session_summary(cycle, elapsed, stats, drop_time, uptime)
+    clear_live_status()
     release_lock()
 
 
