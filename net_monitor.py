@@ -28,7 +28,6 @@ import os
 import sys
 import re
 import signal
-import statistics
 import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1684,7 +1683,6 @@ def generate_dashboard(days=30):
 def live_dashboard(days=30, port=8077):
     """Run a live dashboard with auto-refresh via a local HTTP server."""
     from http.server import HTTPServer, BaseHTTPRequestHandler
-    import threading
     ensure_dirs()
 
     class Handler(BaseHTTPRequestHandler):
