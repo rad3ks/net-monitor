@@ -1938,7 +1938,7 @@ def _build_dashboard_html(data_json, days, live=False):
   async function doRefresh() {
     if (polling) return;
     polling = true;
-    updateBtn('&#8635; refreshing...', 'var(--yellow)');
+    updateBtn('&#8635; ' + t('refreshing'), 'var(--yellow)');
     try {
       var resp = await fetch('/data');
       if (!resp.ok) { polling = false; return; }
@@ -1961,7 +1961,7 @@ def _build_dashboard_html(data_json, days, live=False):
       renderStatusBar();
       countdown = POLL_SEC;
     } catch(e) {
-      updateBtn('&#9679; OFFLINE', 'var(--red)');
+      updateBtn('&#9679; ' + t('offline'), 'var(--red)');
       countdown = POLL_SEC;
     }
     polling = false;
@@ -2158,7 +2158,8 @@ const I18N = {{
     fail_pct: 'Fail %', time: 'Time', duration: 'Duration',
     raw_logs: 'Raw ping logs per hop:', samples: 'Samples',
     monitoring_active: 'Monitoring active', monitoring_inactive: 'Monitoring inactive',
-    slow: 'slow!', timeline: 'Timeline',
+    timeline: 'Timeline',
+    refreshing: 'refreshing...', offline: 'OFFLINE',
     // connection info
     iface: 'Interface', ip: 'IP', gateway: 'Gateway',
     ssid: 'SSID', signal: 'Signal', channel: 'Channel', phy: 'PHY',
@@ -2192,7 +2193,8 @@ const I18N = {{
     fail_pct: '% b\u0142\u0119d\u00f3w', time: 'Czas', duration: 'Czas trwania',
     raw_logs: 'Surowe logi ping per hop:', samples: 'Punkt\u00f3w',
     monitoring_active: 'Monitoring aktywny', monitoring_inactive: 'Monitoring nieaktywny',
-    slow: 'powolny!', timeline: 'Timeline',
+    timeline: 'Timeline',
+    refreshing: 'od\u015bwie\u017canie...', offline: 'OFFLINE',
     // connection info
     iface: 'Interfejs', ip: 'IP', gateway: 'Brama',
     ssid: 'SSID', signal: 'Sygna\u0142', channel: 'Kana\u0142', phy: 'PHY',
@@ -2742,14 +2744,13 @@ function updateLangBtn() {{
   var btn = document.getElementById('lang-btn');
   if (btn) btn.textContent = LANG === 'en' ? 'PL' : 'EN';
   var em = document.getElementById('empty-msg');
-  if (em && em.parentElement.querySelector('.card') === null) em.textContent = t('select_session');
+  if (em) em.textContent = t('select_session');
 }}
 
 function toggleLang() {{
   LANG = LANG === 'en' ? 'pl' : 'en';
   localStorage.setItem('nm_lang', LANG);
   updateLangBtn();
-  renderSidebar();
   if (activeIdx >= 0 && activeIdx < DATA.length) selectSession(activeIdx);
   renderStatusBar();
 }}
