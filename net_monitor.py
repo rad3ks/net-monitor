@@ -34,6 +34,7 @@ import argparse
 import math
 import socket
 import tempfile
+import concurrent.futures
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
@@ -959,23 +960,26 @@ DNS_TEST_DOMAINS = ["google.com", "cloudflare.com", "amazon.com"]
 DNS_TIMEOUT = 3  # seconds
 
 
+def _resolve_domain(domain):
+    """Resolve a single domain and return elapsed ms."""
+    start = time.time()
+    socket.getaddrinfo(domain, 80, socket.AF_INET)
+    return round((time.time() - start) * 1000, 1)
+
+
 def test_dns_resolution():
-    """Measure DNS resolution time using system resolver (with timeout)."""
-    old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(DNS_TIMEOUT)
+    """Measure DNS resolution time using system resolver (with thread-based timeout)."""
     results = []
-    try:
-        for domain in DNS_TEST_DOMAINS:
-            start = time.time()
-            try:
-                socket.getaddrinfo(domain, 80, socket.AF_INET)
-                elapsed_ms = (time.time() - start) * 1000
-                results.append({"domain": domain, "time_ms": round(elapsed_ms, 1), "ok": True})
-            except OSError:
-                elapsed_ms = (time.time() - start) * 1000
-                results.append({"domain": domain, "time_ms": round(elapsed_ms, 1), "ok": False})
-    finally:
-        socket.setdefaulttimeout(old_timeout)
+    for domain in DNS_TEST_DOMAINS:
+        start = time.time()
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(_resolve_domain, domain)
+                ms = fut.result(timeout=DNS_TIMEOUT)
+            results.append({"domain": domain, "time_ms": ms, "ok": True})
+        except (concurrent.futures.TimeoutError, OSError):
+            elapsed_ms = round((time.time() - start) * 1000, 1)
+            results.append({"domain": domain, "time_ms": elapsed_ms, "ok": False})
     return results
 
 
@@ -2196,7 +2200,7 @@ function infoTip(key) {{
   const m = METRIC_INFO[key];
   if (!m) return '';
   const txt = m[_infoLang] || m.en;
-  return `<span class="info-wrap"><span class="info-btn" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')">i</span><span class="info-popup">${{txt}}</span></span>`;
+  return `<span class="info-wrap"><span class="info-btn" onclick="event.stopPropagation();document.querySelectorAll('.info-popup.show').forEach(p=>p.classList.remove('show'));this.nextElementSibling.classList.toggle('show')">i</span><span class="info-popup">${{txt}}</span></span>`;
 }}
 
 function ratingBadge(key, value) {{
