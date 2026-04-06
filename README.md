@@ -1,5 +1,7 @@
 # Net Monitor
 
+![Net Monitor dashboard showing success rates, latency, hop analysis, and timeline](docs/dashboard.jpg)
+
 CLI tool that continuously monitors your internet connection quality and builds hard evidence for ISP complaints. Uses TTL-based hop-by-hop tracing to pinpoint exactly where packets drop — your router, ISP edge, ISP backbone, or beyond.
 
 **Zero dependencies** — one Python file, system tools only.
