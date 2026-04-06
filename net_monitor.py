@@ -63,6 +63,7 @@ STATS_EVERY_N_CYCLES = 5
 DATA_DIR = Path.home() / ".net_monitor"
 OUTPUT_DIR = DATA_DIR / "output"
 REPORT_DIR = DATA_DIR / "reports"
+LIVE_STATUS = DATA_DIR / "live_status.json"
 
 # Per-session paths — set in setup_session_dir()
 SESSION_DIR = None
@@ -766,6 +767,46 @@ def log_event(event_type, data):
         pass
 
 
+def update_live_status(cycle, target_name, run_num, total_runs, result,
+                       ok_runs, fail_runs, faults=None, rtt_samples=None,
+                       failed_runs_detail=None):
+    """Write ephemeral live status file for dashboard real-time progress.
+    Uses atomic rename to prevent partial reads."""
+    rtt_stats = {}
+    if rtt_samples:
+        n = len(rtt_samples)
+        avg = sum(rtt_samples) / n
+        rtt_stats = {"min": round(min(rtt_samples), 1), "avg": round(avg, 1),
+                     "max": round(max(rtt_samples), 1), "n": n}
+    status = {
+        "ts": ts_iso(),
+        "cycle": cycle,
+        "target": target_name,
+        "run": run_num,
+        "total_runs": total_runs,
+        "result": result,
+        "ok": ok_runs,
+        "fail": fail_runs,
+        "faults": faults or [],
+        "rtt_stats": rtt_stats,
+        "failed_runs_detail": failed_runs_detail or [],
+    }
+    try:
+        tmp = LIVE_STATUS.with_suffix(".tmp")
+        tmp.write_text(json.dumps(status, default=str))
+        tmp.rename(LIVE_STATUS)
+    except OSError:
+        pass
+
+
+def clear_live_status():
+    """Remove live status file."""
+    try:
+        LIVE_STATUS.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def init_csv():
     files_headers = {
         HOP_LOG: [
@@ -1152,6 +1193,11 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
 
         sys.stdout.flush()
 
+        update_live_status(cycle_num, target_name, run_num, RUNS_PER_TARGET,
+                           run_result or "?", ok_runs, fail_runs,
+                           faults=faults, rtt_samples=rtt_samples,
+                           failed_runs_detail=failed_runs_detail)
+
         # Pause between runs
         if run_idx < RUNS_PER_TARGET - 1 and not shutdown_check():
             time.sleep(PAUSE_BETWEEN_RUNS)
@@ -1231,6 +1277,7 @@ def run_trace_cycle(target_name, target, cycle_num, stats, shutdown_check):
         stats["zone_faults"][f["zone"]] += 1
 
     # --- Log events ---
+    clear_live_status()  # clear before logging to prevent double-counting race
     log_event("trace_cycle", {
         "target_name": target_name, "target": target,
         "cycle": cycle_num, "runs": total,
@@ -1787,6 +1834,47 @@ def _build_dashboard_data(days=30):
         }
         session_summaries.append(summary)
 
+    # Inject live progress into the active session
+    if session_summaries:
+        try:
+            live = json.loads(LIVE_STATUS.read_text())
+            # Ignore stale status (e.g. after crash) — max 60s old
+            live_ts = live.get("ts", "")
+            if live_ts and (datetime.now() - datetime.fromisoformat(live_ts)).total_seconds() > 60:
+                live = None
+        except (json.JSONDecodeError, OSError, ValueError):
+            live = None
+        if live:
+            last = session_summaries[-1]
+            # Add as in-progress timeline entry
+            last["timeline"].append({
+                "ts": live.get("ts", ""),
+                "ok": live.get("ok", 0),
+                "fail": live.get("fail", 0),
+                "target": live.get("target", "?"),
+            })
+            # Add to session totals
+            last["total_runs"] += live.get("ok", 0) + live.get("fail", 0)
+            last["ok_runs"] += live.get("ok", 0)
+            last["fail_runs"] += live.get("fail", 0)
+            if last["total_runs"] > 0:
+                last["success_pct"] = round(last["ok_runs"] / last["total_runs"] * 100, 1)
+            # Add faults to zone_faults
+            for f in live.get("faults", []):
+                zone = f.get("zone", "?")
+                last["zone_faults"][zone] = last["zone_faults"].get(zone, 0) + 1
+            # Add rtt_stats
+            rtt_data = live.get("rtt_stats")
+            if rtt_data and rtt_data.get("n", 0) > 0:
+                last["rtt_stats"].append({
+                    **rtt_data,
+                    "target": live.get("target", "?"),
+                    "ts": live.get("ts", ""),
+                })
+            # Add failed run evidence
+            for frd in live.get("failed_runs_detail", []):
+                last["failed_runs"].append(frd)
+
     return session_summaries
 
 
@@ -1835,11 +1923,20 @@ def _check_monitor_status():
                 )
                 if dirs:
                     active_session = dirs[0].name
-            return {
+            result = {
                 "running": True,
                 "pid": pid,
                 "session": active_session,
             }
+            # Read live progress if available (ignore stale > 60s)
+            try:
+                live = json.loads(LIVE_STATUS.read_text())
+                live_ts = live.get("ts", "")
+                if live_ts and (datetime.now() - datetime.fromisoformat(live_ts)).total_seconds() <= 60:
+                    result["live"] = live
+            except (json.JSONDecodeError, OSError, ValueError):
+                pass
+            return result
         else:
             return {"running": False}
     except (ValueError, OSError):
@@ -1894,7 +1991,7 @@ def live_dashboard(days=30, port=8077):
     url = f"http://localhost:{port}"
     print(f"\n{BOLD}Net Monitor — Live Dashboard{RESET}")
     print(f"{GREEN}  {url}{RESET}")
-    print(f"{DIM}  Auto-refresh co 5s | Ctrl+C aby zatrzymac{RESET}\n")
+    print(f"{DIM}  Auto-refresh co 10s | Ctrl+C aby zatrzymac{RESET}\n")
 
     import webbrowser
     webbrowser.open(url)
@@ -1917,7 +2014,7 @@ def _build_dashboard_html(data_json, days, live=False):
         live_js = """
 // ── Live auto-refresh ──
 (function() {
-  var POLL_SEC = 5;
+  var POLL_SEC = 10;
   var countdown = POLL_SEC;
   var polling = false;
 
@@ -1973,7 +2070,8 @@ def _build_dashboard_html(data_json, days, live=False):
     if (countdown <= 0) {
       doRefresh();
     } else {
-      updateBtn('&#9679; LIVE ' + countdown + 's', 'var(--green)');
+      var ago = POLL_SEC - countdown;
+      updateBtn('&#8635; ' + t('updated') + ' ' + ago + 's ' + t('ago'), ago < 10 ? 'var(--green)' : 'var(--fg2)');
     }
   }, 1000);
 })();
@@ -2001,7 +2099,7 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
   border-right: 1px solid var(--border); overflow-y: auto;
   padding: 16px 0;
 }}
-.sidebar h1 {{ font-size: 1em; color: var(--blue); padding: 0 16px 0; }}
+.sidebar h1 {{ font-size: 1em; color: var(--blue); padding: 0; }}
 .session-btn {{
   display: block; width: 100%; padding: 10px 16px;
   background: none; border: none; border-left: 3px solid transparent;
@@ -2120,10 +2218,10 @@ tr:hover td {{ background: var(--bg3); }}
 <div class="layout">
 
 <div class="sidebar" id="sidebar">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:0 16px">
     <h1 style="margin:0">Net Monitor</h1>
     <div style="display:flex;gap:6px;align-items:center">
-      <button id="live-btn" title="Click to refresh" style="font-size:0.7em;background:var(--bg3);color:var(--green);border:1px solid var(--green);border-radius:3px;padding:2px 8px;cursor:pointer;display:none">&#9679; LIVE</button>
+      <button id="live-btn" title="Click to refresh" style="font-size:0.7em;background:var(--bg3);color:var(--green);border:1px solid var(--green);border-radius:3px;padding:2px 8px;cursor:pointer;display:none">&#8635; Updated</button>
       <button id="lang-btn" onclick="toggleLang()" style="font-size:0.7em;background:var(--bg3);color:var(--fg2);border:1px solid var(--fg3);border-radius:3px;padding:2px 8px;cursor:pointer"></button>
     </div>
   </div>
@@ -2159,7 +2257,8 @@ const I18N = {{
     raw_logs: 'Raw ping logs per hop:', samples: 'Samples',
     monitoring_active: 'Monitoring active', monitoring_inactive: 'Monitoring inactive',
     timeline: 'Timeline',
-    refreshing: 'refreshing...', offline: 'OFFLINE',
+    refreshing: 'Refreshing...', offline: 'OFFLINE',
+    updated: 'Updated', ago: 'ago',
     // connection info
     iface: 'Interface', ip: 'IP', gateway: 'Gateway',
     ssid: 'SSID', signal: 'Signal', channel: 'Channel', phy: 'PHY',
@@ -2194,7 +2293,8 @@ const I18N = {{
     raw_logs: 'Surowe logi ping per hop:', samples: 'Punkt\u00f3w',
     monitoring_active: 'Monitoring aktywny', monitoring_inactive: 'Monitoring nieaktywny',
     timeline: 'Timeline',
-    refreshing: 'od\u015bwie\u017canie...', offline: 'OFFLINE',
+    refreshing: 'Od\u015bwie\u017canie...', offline: 'OFFLINE',
+    updated: 'Zaktualizowano', ago: 'temu',
     // connection info
     iface: 'Interfejs', ip: 'IP', gateway: 'Brama',
     ssid: 'SSID', signal: 'Sygna\u0142', channel: 'Kana\u0142', phy: 'PHY',
@@ -2338,8 +2438,8 @@ function renderSidebar() {{
   DATA.forEach((s, i) => {{
     const bc = s.success_pct >= 95 ? 's-ok' : s.success_pct >= 80 ? 's-warn' : 's-bad';
     const d = s.start || s.name;
-    const conn = s.wifi_ssid ? s.wifi_ssid + ' ' + (s.wifi_rssi||'') + 'dBm'
-      : s.interface_type === 'ethernet' ? 'Ethernet' : s.interface_type;
+    const conn = s.wifi_ssid ? escHtml(s.wifi_ssid) + ' ' + (s.wifi_rssi||'') + 'dBm'
+      : s.interface_type === 'ethernet' ? 'Ethernet' : escHtml(s.interface_type);
     const btn = document.createElement('button');
     btn.className = 'session-btn';
     btn.innerHTML = `<div class="s-date">${{d}}</div>
@@ -2372,11 +2472,11 @@ function renderSession(s) {{
     <div class="card">
       <h2>${{t('session')}}: ${{s.start || s.name}}</h2>
       <div class="conn-grid">
-        <div class="conn-cell"><div class="cl">${{t('iface')}}</div><div class="cv">${{s.interface}} (${{s.interface_type}})</div></div>
-        <div class="conn-cell"><div class="cl">${{t('ip')}}</div><div class="cv">${{s.ip}}</div></div>
-        <div class="conn-cell"><div class="cl">${{t('gateway')}}</div><div class="cv">${{s.gateway}}</div></div>
+        <div class="conn-cell"><div class="cl">${{t('iface')}}</div><div class="cv">${{escHtml(s.interface)}} (${{escHtml(s.interface_type)}})</div></div>
+        <div class="conn-cell"><div class="cl">${{t('ip')}}</div><div class="cv">${{escHtml(s.ip)}}</div></div>
+        <div class="conn-cell"><div class="cl">${{t('gateway')}}</div><div class="cv">${{escHtml(s.gateway)}}</div></div>
         ${{s.wifi_ssid ? `
-          <div class="conn-cell"><div class="cl">${{t('ssid')}}</div><div class="cv">${{s.wifi_ssid}}</div></div>
+          <div class="conn-cell"><div class="cl">${{t('ssid')}}</div><div class="cv">${{escHtml(s.wifi_ssid)}}</div></div>
           <div class="conn-cell"><div class="cl">${{t('signal')}}</div><div class="cv">${{s.wifi_rssi||'?'}} dBm</div></div>
           <div class="conn-cell"><div class="cl">${{t('channel')}}</div><div class="cv">${{s.wifi_channel||'?'}}</div></div>
           <div class="conn-cell"><div class="cl">${{t('phy')}}</div><div class="cv">${{s.wifi_phy||'?'}}</div></div>
@@ -2456,7 +2556,7 @@ function renderSession(s) {{
         const total = zones.reduce((a,x) => a+x[1], 0);
         leg.innerHTML = zones.map(([z,c]) =>
           `<div><span class="pie-dot" style="background:${{zc(z)}}"></span>
-          ${{z}}: ${{c}} (${{(c/total*100).toFixed(0)}}%)</div>`
+          ${{escHtml(z)}}: ${{c}} (${{(c/total*100).toFixed(0)}}%)</div>`
         ).join('');
       }}
     }}
@@ -2475,7 +2575,7 @@ function renderSession(s) {{
       if (leg2) {{
         leg2.innerHTML = hopSlices.map(sl =>
           `<div><span class="pie-dot" style="background:${{sl.color}}"></span>
-          ${{sl.label}}: ${{sl.value}}</div>`
+          ${{escHtml(sl.label)}}: ${{sl.value}}</div>`
         ).join('');
       }}
     }}
@@ -2488,10 +2588,10 @@ function renderTimeline(timeline) {{
   timeline.forEach(ev => {{
     if (ev.event === 'drop_start') {{
       html += `<div class="tbar" style="height:100%;background:var(--red);opacity:0.3"
-        data-tip="${{t('drop_start')}} ${{ev.zone}}"></div>`;
+        data-tip="${{escHtml(t('drop_start') + ' ' + (ev.zone||''))}}"></div>`;
     }} else if (ev.event === 'drop_end') {{
       html += `<div class="tbar" style="height:100%;background:var(--red)"
-        data-tip="${{t('drop_tooltip')}} ${{ev.duration}}s ${{ev.zone}}"></div>`;
+        data-tip="${{escHtml(t('drop_tooltip') + ' ' + ev.duration + 's ' + (ev.zone||''))}}"></div>`;
     }} else {{
       const total = (ev.ok||0) + (ev.fail||0);
       const pct = total > 0 ? ev.ok/total : 1;
@@ -2499,7 +2599,7 @@ function renderTimeline(timeline) {{
       const c = pct >= 1 ? 'var(--green)' : pct >= 0.8 ? 'var(--yellow)' : 'var(--red)';
       const time = ev.ts ? ev.ts.split('T')[1]?.substring(0,8) || '' : '';
       html += `<div class="tbar" style="height:${{h}}%;background:${{c}}"
-        data-tip="${{time}} ${{ev.target}} ${{ev.ok}}/${{total}} OK"></div>`;
+        data-tip="${{escHtml(time + ' ' + (ev.target||'') + ' ' + ev.ok + '/' + total + ' OK')}}"></div>`;
     }}
   }});
   html += '</div>';
@@ -2517,10 +2617,10 @@ function renderHopTable(hops, totalRuns) {{
     const barColor = pctNum > 20 ? 'var(--red)' : pctNum > 5 ? 'var(--yellow)' : 'var(--green)';
     html += `<tr>
       <td><b>hop ${{h.hop_num}}</b></td>
-      <td class="hop-ip">${{h.ip}}</td>
-      <td><span class="hop-zone ${{zclass}}">${{h.zone}}</span></td>
+      <td class="hop-ip">${{escHtml(h.ip)}}</td>
+      <td><span class="hop-zone ${{zclass}}">${{escHtml(h.zone)}}</span></td>
       <td style="color:var(--red);font-weight:600">${{h.failed}}</td>
-      <td style="font-size:0.8em;color:var(--fg2)">${{h.targets.join(', ')}}</td>
+      <td style="font-size:0.8em;color:var(--fg2)">${{h.targets.map(escHtml).join(', ')}}</td>
       <td>${{pct}}%</td>
       <td style="width:100px"><div class="bar-bg"><div class="bar-fill" style="width:${{Math.min(100,pctNum)}}%;background:${{barColor}}"></div></div></td>
     </tr>`;
@@ -2532,8 +2632,8 @@ function renderHopTable(hops, totalRuns) {{
 function renderDrops(drops) {{
   let html = '<table><tr><th>' + t('time') + '</th><th>' + t('duration') + '</th><th>' + t('zone') + '</th></tr>';
   drops.forEach(d => {{
-    html += `<tr><td>${{d.ts||''}}</td><td style="font-weight:600;color:var(--red)">${{d.duration||0}}s</td>
-      <td style="color:${{zc(d.zone)}}">${{d.zone||'?'}}</td></tr>`;
+    html += `<tr><td>${{escHtml(d.ts||'')}}</td><td style="font-weight:600;color:var(--red)">${{d.duration||0}}s</td>
+      <td style="color:${{zc(d.zone)}}">${{escHtml(d.zone||'?')}}</td></tr>`;
   }});
   html += '</table>';
   return html;
@@ -2569,7 +2669,7 @@ function renderFailedRuns(runs) {{
   let html = '';
   runs.forEach((r, idx) => {{
     const time = r.ts ? r.ts.split('T')[1]?.substring(0,8) || r.ts : '';
-    const hopInfo = r.fail_hop ? `hop ${{r.fail_hop}} [${{r.fail_zone}}] ${{r.fail_host}}` : 'unknown';
+    const hopInfo = r.fail_hop ? `hop ${{r.fail_hop}} [${{escHtml(r.fail_zone)}}] ${{escHtml(r.fail_host)}}` : 'unknown';
     const zclass = (r.fail_zone==='LOCAL') ? 'zone-local'
       : (r.fail_zone==='ISP_EDGE'||r.fail_zone==='ISP_CORE') ? 'zone-isp' : 'zone-transit';
 
@@ -2579,9 +2679,9 @@ function renderFailedRuns(runs) {{
           <span class="toggle-arrow">&#9654;</span>
           <b style="color:var(--red)">Run #${{r.run}}</b>
           <span style="color:var(--fg2);margin:0 8px">${{time}}</span>
-          <span style="color:var(--fg2)">${{r.target}}</span>
+          <span style="color:var(--fg2)">${{escHtml(r.target)}}</span>
           <span style="margin-left:8px">&#10007; ${{hopInfo}}</span>
-          <span class="hop-zone ${{zclass}}" style="margin-left:6px">${{r.fail_zone||'?'}}</span>
+          <span class="hop-zone ${{zclass}}" style="margin-left:6px">${{escHtml(r.fail_zone||'?')}}</span>
         </div>
       </div>
       <div class="failed-run-body">`;
@@ -2592,11 +2692,11 @@ function renderFailedRuns(runs) {{
       if (h.status === 'skipped') {{
         html += `<span class="hop-badge hop-skip">${{h.ttl}}:???</span>`;
       }} else if (h.status === 'timeout') {{
-        html += `<span class="hop-badge hop-fail">${{h.ttl}}:${{h.hop}} TIMEOUT</span>`;
+        html += `<span class="hop-badge hop-fail">${{h.ttl}}:${{escHtml(h.hop)}} TIMEOUT</span>`;
       }} else if (h.status === 'reached') {{
         html += `<span class="hop-badge hop-ok">${{h.ttl}}:&#10003; ${{h.rtt_ms ? h.rtt_ms.toFixed(0)+'ms' : ''}}</span>`;
       }} else {{
-        html += `<span class="hop-badge hop-ok">${{h.ttl}}:${{h.hop_ip||h.hop}}</span>`;
+        html += `<span class="hop-badge hop-ok">${{h.ttl}}:${{escHtml(h.hop_ip||h.hop)}}</span>`;
       }}
     }});
     html += '</div>';
@@ -2607,7 +2707,7 @@ function renderFailedRuns(runs) {{
       if (h.status !== 'skipped' && h.raw) {{
         const statusColor = h.status === 'timeout' ? 'var(--red)' : 'var(--green)';
         html += `<div style="margin:2px 0;font-size:0.85em">
-          <b style="color:${{statusColor}}">TTL ${{h.ttl}}</b> (${{h.hop}}) — ${{h.status}}
+          <b style="color:${{statusColor}}">TTL ${{h.ttl}}</b> (${{escHtml(h.hop)}}) — ${{h.status}}
         </div>
         <div class="raw-log">${{escHtml(h.raw)}}</div>`;
       }}
@@ -2619,8 +2719,9 @@ function renderFailedRuns(runs) {{
 }}
 
 function escHtml(s) {{
-  if (!s) return '';
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  if (s == null) return '';
+  s = String(s);
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }}
 
 // ── Stability metrics cards ──
@@ -2648,7 +2749,7 @@ function renderStabilityCards(s) {{
         ${{rtt.slice(-20).map(r => {{
           const jc = (r.jitter||0) > 30 ? 'color:var(--red)' : (r.jitter||0) > 15 ? 'color:var(--yellow)' : '';
           const time = r.ts ? r.ts.split('T')[1]?.substring(0,8) || '' : '';
-          return '<tr><td>' + time + '</td><td>' + (r.target||'') + '</td><td>' + (r.min||0) + '</td><td>' + (r.avg||0) + '</td><td>' + (r.max||0) + '</td><td style="' + jc + '"><b>' + (r.jitter||0) + '</b></td><td>' + (r.stddev||0) + '</td></tr>';
+          return '<tr><td>' + time + '</td><td>' + escHtml(r.target||'') + '</td><td>' + (r.min||0) + '</td><td>' + (r.avg||0) + '</td><td>' + (r.max||0) + '</td><td style="' + jc + '"><b>' + (r.jitter||0) + '</b></td><td>' + (r.stddev||0) + '</td></tr>';
         }}).join('')}}
         </table>
       </div>
@@ -2673,7 +2774,7 @@ function renderStabilityCards(s) {{
       </div>
       <div style="margin-top:10px;font-size:0.82em">
         <table><tr><th>${{t('domain')}}</th><th>${{t('last_ms')}}</th><th>${{t('status')}}</th></tr>
-        ${{results.map(r => '<tr><td>' + r.domain + '</td><td>' + r.time_ms + '</td><td style="color:' + (r.ok ? 'var(--green)' : 'var(--red)') + '">' + (r.ok ? 'OK' : 'FAIL') + '</td></tr>').join('')}}
+        ${{results.map(r => '<tr><td>' + escHtml(r.domain) + '</td><td>' + r.time_ms + '</td><td style="color:' + (r.ok ? 'var(--green)' : 'var(--red)') + '">' + (r.ok ? 'OK' : 'FAIL') + '</td></tr>').join('')}}
         </table>
       </div>
     </div>`;
@@ -2720,8 +2821,19 @@ function renderStatusBar() {{
     bar.style.display = 'block';
     bar.style.background = '#0d1117';
     bar.style.color = '#3fb950';
-    bar.innerHTML = '\u25cf ' + t('monitoring_active') + ' &mdash; PID ' + MONITOR.pid
-      + (MONITOR.session ? ' | session: ' + MONITOR.session : '');
+    var info = '\u25cf ' + t('monitoring_active') + ' &mdash; PID ' + MONITOR.pid
+      + (MONITOR.session ? ' | session: ' + escHtml(MONITOR.session) : '');
+    if (MONITOR.live) {{
+      var lv = MONITOR.live;
+      var pct = lv.total_runs > 0 ? Math.round(lv.run / lv.total_runs * 100) : 0;
+      var dots = lv.ok > 0 || lv.fail > 0
+        ? ' | <span style="color:var(--green)">' + lv.ok + ' OK</span>'
+          + (lv.fail > 0 ? ' <span style="color:var(--red)">' + lv.fail + ' FAIL</span>' : '')
+        : '';
+      info += ' | cycle #' + lv.cycle + ' \u2192 ' + escHtml(lv.target)
+        + ' [run ' + lv.run + '/' + lv.total_runs + ' \u2014 ' + pct + '%]' + dots;
+    }}
+    bar.innerHTML = info;
   }} else if (Object.keys(MONITOR).length) {{
     bar.style.display = 'block';
     bar.style.background = '#0d1117';
@@ -3083,7 +3195,8 @@ def monitor():
         print(f"\n{RED}Error: {e}{RESET}")
         import traceback
         traceback.print_exc()
-        release_lock()
+    finally:
+        clear_live_status()
 
     # --- Graceful shutdown ---
     elapsed = time.time() - session_start
