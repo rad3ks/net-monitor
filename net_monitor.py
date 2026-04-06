@@ -2166,7 +2166,8 @@ tr:hover td {{ background: var(--bg3); }}
   pointer-events:none;
 }}
 .timeline-axis {{ display:flex; gap:1px; font-size:0.65em; color:var(--fg3); margin-top:2px; }}
-.timeline-axis span {{ min-width:4px; width:6px; flex-shrink:0; text-align:center; overflow:visible; white-space:nowrap; }}
+.timeline-axis span {{ min-width:4px; width:6px; flex-shrink:0; position:relative; }}
+.timeline-axis span:not(:empty)::after {{ content:attr(data-label); position:absolute; left:50%; transform:translateX(-50%); white-space:nowrap; }}
 .empty {{ color: var(--fg3); text-align: center; padding: 40px; }}
 .hop-ip {{ font-family: monospace; color: var(--blue); }}
 .hop-zone {{ font-size: 0.8em; padding: 2px 6px; border-radius: 4px; }}
@@ -2615,7 +2616,7 @@ function renderTimeline(timeline) {{
   const step = Math.max(1, Math.floor(n / 10));
   for (let i = 0; i < n; i++) {{
     if (i % step === 0 && labels[i]) {{
-      axis += `<span>${{escHtml(labels[i])}}</span>`;
+      axis += `<span data-label="${{escHtml(labels[i])}}"></span>`;
     }} else {{
       axis += '<span></span>';
     }}
