@@ -3348,7 +3348,7 @@ def print_help():
   {GREEN}(brak opcji){RESET}            Uruchom monitoring (ciagly, Ctrl+C aby zatrzymac)
   {GREEN}--report{RESET}                Generuj raport Markdown + JSON z zebranych danych
   {GREEN}--dashboard{RESET}             Generuj interaktywny HTML dashboard i otworz w przegladarce
-  {GREEN}--live{RESET}                  Dashboard na zywo — auto-refresh co 5s (serwer HTTP)
+  {GREEN}--live{RESET}                  Dashboard na zywo — auto-refresh co 10s (serwer HTTP)
 
 {BOLD}Zarzadzanie danymi:{RESET}
   {GREEN}--list{RESET}                  Wyswietl liste sesji z rozmiarem
@@ -3373,7 +3373,7 @@ def print_help():
   {DIM}# Dashboard ze wszystkich sesji:{RESET}
   python3 net_monitor.py --dashboard
 
-  {DIM}# Live dashboard (odswiezany co 5s):{RESET}
+  {DIM}# Live dashboard (odswiezany co 10s):{RESET}
   python3 net_monitor.py --live
 
   {DIM}# Porzadki — usun stare, zostaw ostatni tydzien:{RESET}
