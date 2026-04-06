@@ -63,4 +63,6 @@ Przeanalizuj logi z ~/.net_monitor/ uzywajac prompta z analyze_prompt.md
 Claude reads `connection_info.json` + `events.jsonl` from each session and produces diagnosis with ISP counterarguments.
 
 ## PR workflow
-After completing all changes, always create a PR and run code review (CR) in a loop — fix all reported issues until CR returns no problems, then merge.
+After completing all changes, always create a PR, functionally test the feature first, then run code review (CR) in a loop — fix all reported issues until CR returns no problems. Do not auto-merge — wait for explicit user approval before merging.
+
+**CR is mandatory for every PR, regardless of change size.** Even documentation-only or single-line fixes must go through CR.
