@@ -2152,22 +2152,16 @@ tr:hover td {{ background: var(--bg3); }}
 .conn-cell {{ background: var(--bg3); padding: 8px 12px; border-radius: 6px; }}
 .conn-cell .cl {{ font-size: 0.72em; color: var(--fg2); }}
 .conn-cell .cv {{ font-size: 0.88em; font-weight: 500; }}
-.timeline-wrap {{ overflow-x:auto; margin:8px 0; }}
-.timeline-inner {{ display:inline-flex; flex-direction:column; min-width:100%; padding:28px 20px 0; }}
+.timeline-wrap {{ overflow-x:auto; overflow-y:hidden; margin:8px 0; }}
+.timeline-inner {{ display:inline-flex; flex-direction:column; min-width:100%; padding:4px 20px 18px; }}
 .timeline {{ display:flex; gap:1px; height:40px; align-items:flex-end; }}
 .tbar {{
   min-width:4px; width:6px; flex-shrink:0; border-radius:2px 2px 0 0;
   cursor:pointer; position:relative;
 }}
-.tbar:hover::after {{
-  content:attr(data-tip); position:absolute; bottom:105%;
-  left:50%; transform:translateX(-50%); background:#000; color:var(--fg);
-  padding:4px 8px; border-radius:4px; font-size:0.72em; white-space:nowrap; z-index:10;
-  pointer-events:none;
-}}
-.timeline-axis {{ display:flex; gap:1px; font-size:0.65em; color:var(--fg3); margin-top:2px; }}
-.timeline-axis span {{ min-width:4px; width:6px; flex-shrink:0; position:relative; }}
-.timeline-axis span[data-label]::after {{ content:attr(data-label); position:absolute; left:50%; transform:translateX(-50%); white-space:nowrap; }}
+.timeline-axis {{ display:flex; gap:1px; font-size:0.65em; color:var(--fg3); margin-top:2px; height:14px; }}
+.timeline-axis span {{ min-width:4px; width:6px; flex-shrink:0; position:relative; height:14px; }}
+.timeline-axis span[data-label]::after {{ content:attr(data-label); position:absolute; top:0; left:50%; transform:translateX(-50%); white-space:nowrap; }}
 .empty {{ color: var(--fg3); text-align: center; padding: 40px; }}
 .hop-ip {{ font-family: monospace; color: var(--blue); }}
 .hop-zone {{ font-size: 0.8em; padding: 2px 6px; border-radius: 4px; }}
@@ -2200,18 +2194,21 @@ tr:hover td {{ background: var(--bg3); }}
 .hop-ok {{ background: rgba(63,185,80,0.12); color: var(--green); }}
 .hop-fail {{ background: rgba(248,81,73,0.15); color: var(--red); font-weight: 600; }}
 .hop-skip {{ background: rgba(139,148,158,0.12); color: var(--fg3); }}
-.rssi-chart {{ height: 60px; display: flex; align-items: flex-end; gap: 1px; margin: 8px 0; }}
+.rssi-wrap {{ overflow-x:auto; overflow-y:hidden; margin:8px 0; }}
+.rssi-inner {{ display:inline-flex; flex-direction:column; min-width:100%; padding:4px 20px 18px; }}
+.rssi-chart {{ height: 60px; display: flex; align-items: flex-end; gap: 1px; }}
 .rssi-bar {{
-  flex: 1; min-width: 2px; max-width: 6px; border-radius: 2px 2px 0 0;
+  min-width:4px; width:6px; flex-shrink:0; border-radius: 2px 2px 0 0;
   cursor: pointer; position: relative;
 }}
-.rssi-bar:hover::after {{
-  content:attr(data-tip); position:absolute; bottom:105%;
-  left:50%; transform:translateX(-50%); background:#000; color:var(--fg);
-  padding:4px 8px; border-radius:4px; font-size:0.72em; white-space:nowrap; z-index:10;
-}}
+.float-tip {{ position:fixed; background:#000; color:var(--fg); padding:4px 8px; border-radius:4px; font-size:0.72em; white-space:nowrap; z-index:999; pointer-events:none; display:none; }}
+.rssi-axis {{ display:flex; gap:1px; font-size:0.65em; color:var(--fg3); margin-top:2px; height:14px; }}
+.rssi-axis span {{ min-width:4px; width:6px; flex-shrink:0; position:relative; height:14px; }}
+.rssi-axis span[data-label]::after {{ content:attr(data-label); position:absolute; top:0; left:50%; transform:translateX(-50%); white-space:nowrap; }}
 .toggle-arrow {{ transition: transform 0.2s; display: inline-block; }}
 .toggle-arrow.open {{ transform: rotate(90deg); }}
+.coll-body {{ display:none; }}
+.coll-body.open {{ display:block; }}
 .info-wrap {{ display:inline;position:relative; }}
 .info-btn {{ display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--bg3);color:var(--fg2);font-size:9px;font-style:italic;font-weight:700;cursor:pointer;margin-left:3px;border:1px solid var(--fg3);vertical-align:middle;user-select:none; }}
 .info-btn:hover {{ background:var(--fg3);color:var(--fg); }}
@@ -2240,6 +2237,7 @@ tr:hover td {{ background: var(--bg3); }}
 </div>
 
 <div id="status-bar" style="display:none;position:fixed;bottom:0;left:0;right:0;padding:6px 16px;font-size:0.78em;font-family:monospace;z-index:100;border-top:1px solid var(--border)"></div>
+<div id="float-tip" class="float-tip"></div>
 
 <script>
 const _INIT = {data_json};
@@ -2259,7 +2257,7 @@ const I18N = {{
     evidence_hint: 'Each entry contains raw ping logs per hop. Click to expand.',
     no_data: 'No data', hop: 'Hop', zone: 'Zone', failures: 'Failures',
     fail_pct: 'Fail %', time: 'Time', duration: 'Duration',
-    raw_logs: 'Raw ping logs per hop:', samples: 'Samples',
+    raw_logs: 'Raw ping logs per hop:', samples: 'Samples', details: 'Details',
     monitoring_active: 'Monitoring active', monitoring_inactive: 'Monitoring inactive',
     timeline: 'Timeline',
     refreshing: 'Refreshing...', offline: 'OFFLINE',
@@ -2295,7 +2293,7 @@ const I18N = {{
     evidence_hint: 'Ka\u017cdy wpis zawiera surowe logi z pinga per hop. Kliknij aby rozwina\u0107.',
     no_data: 'Brak danych', hop: 'Hop', zone: 'Strefa', failures: 'Awarie',
     fail_pct: '% b\u0142\u0119d\u00f3w', time: 'Czas', duration: 'Czas trwania',
-    raw_logs: 'Surowe logi ping per hop:', samples: 'Punkt\u00f3w',
+    raw_logs: 'Surowe logi ping per hop:', samples: 'Punkt\u00f3w', details: 'Szczeg\u00f3\u0142y',
     monitoring_active: 'Monitoring aktywny', monitoring_inactive: 'Monitoring nieaktywny',
     timeline: 'Timeline',
     refreshing: 'Od\u015bwie\u017canie...', offline: 'OFFLINE',
@@ -2675,16 +2673,36 @@ function renderRssiChart(history) {{
 
   let html = `<div style="font-size:0.82em;color:var(--fg2);margin-bottom:4px">` +
     `Min: <b>${{mn}}</b> dBm | Max: <b>${{mx}}</b> dBm | Avg: <b>${{avg}}</b> dBm | ${{t('samples')}}: ${{vals.length}}</div>`;
-  html += '<div class="rssi-chart">';
+  // Build bars
+  let bars = '';
+  const labels = [];
   history.forEach(h => {{
     const pct = Math.max(10, ((h.rssi - minR + 5) / (range + 10)) * 100);
     const c = h.rssi >= -50 ? 'var(--green)' : h.rssi >= -65 ? 'var(--green)' :
       h.rssi >= -75 ? 'var(--yellow)' : 'var(--red)';
-    const time = h.ts ? h.ts.split('T')[1]?.substring(0,8) || '' : '';
-    html += `<div class="rssi-bar" style="height:${{pct}}%;background:${{c}}"
-      data-tip="${{time}} ${{h.rssi}}dBm"></div>`;
+    const time = h.ts ? h.ts.split('T')[1]?.substring(0,5) || '' : '';
+    labels.push(time);
+    bars += `<div class="rssi-bar" style="height:${{pct}}%;background:${{c}}"
+      data-tip="${{escHtml(time + ' ' + h.rssi + 'dBm')}}"></div>`;
   }});
-  html += '</div>';
+  // Build time axis
+  let axis = '';
+  const n = labels.length;
+  const minStep = Math.ceil(40 / 7);
+  const step = Math.max(minStep, Math.floor(n / 10));
+  for (let i = 0; i < n; i++) {{
+    if (i % step === 0 && labels[i]) {{
+      axis += `<span data-label="${{escHtml(labels[i])}}"></span>`;
+    }} else {{
+      axis += '<span></span>';
+    }}
+  }}
+  html += `<div class="rssi-wrap">
+    <div class="rssi-inner">
+      <div class="rssi-chart">${{bars}}</div>
+      <div class="rssi-axis">${{axis}}</div>
+    </div>
+  </div>`;
   return html;
 }}
 
@@ -2768,7 +2786,9 @@ function renderStabilityCards(s) {{
         <div class="metric"><div class="num" style="color:${{maxJColor}}">${{maxJitter}}</div><div class="lbl">${{t('max_jitter_ms')}}</div></div>
         <div class="metric"><div class="num">${{rtt.length}}</div><div class="lbl">${{t('samples')}}</div></div>
       </div>
-      <div style="margin-top:10px;font-size:0.82em">
+      <div style="margin-top:10px;font-size:0.82em;cursor:pointer" onclick="this.querySelector('.toggle-arrow').classList.toggle('open');this.querySelector('.coll-body').classList.toggle('open')">
+        <div style="color:var(--fg2);margin-bottom:4px"><span class="toggle-arrow">&#9654;</span> ${{t('details')}} (${{rtt.length}})</div>
+        <div class="coll-body" style="display:none">
         <table><tr><th>${{t('time')}}</th><th>${{t('target')}}</th><th>${{t('min')}}</th><th>${{t('avg')}}</th><th>${{t('max')}}</th><th>${{t('jitter_hdr')}}</th><th>${{t('stddev')}}</th></tr>
         ${{rtt.slice(-20).map(r => {{
           const jc = (r.jitter||0) > 30 ? 'color:var(--red)' : (r.jitter||0) > 15 ? 'color:var(--yellow)' : '';
@@ -2776,6 +2796,7 @@ function renderStabilityCards(s) {{
           return '<tr><td>' + time + '</td><td>' + escHtml(r.target||'') + '</td><td>' + (r.min||0) + '</td><td>' + (r.avg||0) + '</td><td>' + (r.max||0) + '</td><td style="' + jc + '"><b>' + (r.jitter||0) + '</b></td><td>' + (r.stddev||0) + '</td></tr>';
         }}).join('')}}
         </table>
+        </div>
       </div>
     </div>`;
   }}
@@ -2899,6 +2920,23 @@ document.getElementById('empty-msg').textContent = t('select_session');
 renderSidebar();
 if (DATA.length) selectSession(DATA.length - 1);
 renderStatusBar();
+// ── Floating tooltip for [data-tip] elements ──
+(function() {{
+  const tip = document.getElementById('float-tip');
+  document.addEventListener('mouseover', function(e) {{
+    const el = e.target.closest('[data-tip]');
+    if (el) {{
+      tip.textContent = el.getAttribute('data-tip');
+      tip.style.display = 'block';
+      const r = el.getBoundingClientRect();
+      tip.style.left = (r.left + r.width/2 - tip.offsetWidth/2) + 'px';
+      tip.style.top = (r.top - tip.offsetHeight - 4) + 'px';
+    }}
+  }});
+  document.addEventListener('mouseout', function(e) {{
+    if (e.target.closest('[data-tip]')) tip.style.display = 'none';
+  }});
+}})();
 {live_js}
 </script>
 </body>
