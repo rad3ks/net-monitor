@@ -21,35 +21,35 @@ sudo python3 net_monitor.py
 
 ### Windows
 
-**Wymagania:**
-- Python 3.8+ — [python.org](https://www.python.org/downloads/) lub `winget install Python.Python.3.12`
-- Git — [git-scm.com](https://git-scm.com/download/win) lub `winget install Git.Git`
-- `tracert`, `ping`, `curl` — wbudowane w Windows 10+
+**Requirements:**
+- Python 3.8+ — [python.org](https://www.python.org/downloads/) or `winget install Python.Python.3.12`
+- Git — [git-scm.com](https://git-scm.com/download/win) or `winget install Git.Git`
+- `tracert`, `ping`, `curl` — built into Windows 10+
 
-**Instalacja i uruchomienie:**
+**Install and run:**
 
-1. Otwórz **PowerShell jako Administrator** (prawy klik na Start > "Terminal (Admin)" lub "Windows PowerShell (Admin)")
+1. Open **PowerShell as Administrator** (right-click Start > "Terminal (Admin)" or "Windows PowerShell (Admin)")
 
-2. Wybierz folder i sklonuj repo:
+2. Clone the repo:
 ```powershell
 cd ~\Documents
 git clone https://github.com/rad3ks/net-monitor.git
 cd net-monitor
 ```
 
-3. Uruchom monitoring:
+3. Start monitoring:
 ```powershell
 python net_monitor.py
 ```
 
-4. Zatrzymaj: `Ctrl+C` — wyswietli podsumowanie sesji
+4. Stop: `Ctrl+C` — prints session summary
 
-5. Wygeneruj dashboard:
+5. Generate dashboard:
 ```powershell
 python net_monitor.py --dashboard
 ```
 
-> **Uwaga:** Uruchomienie jako Administrator jest wymagane — `tracert` i `ping` z niestandardowym TTL potrzebuja podwyzszonych uprawnien.
+> **Note:** Running as Administrator is required — `tracert` and `ping` with custom TTL need elevated privileges.
 
 ### Linux
 
@@ -95,7 +95,7 @@ If hop 1 is clean and problems start at hop 2+ — the ISP is at fault.
 python3 net_monitor.py                     # Run monitoring (Ctrl+C to stop)
 python3 net_monitor.py --report            # Generate Markdown + JSON report
 python3 net_monitor.py --dashboard         # Generate interactive HTML dashboard
-python3 net_monitor.py --live              # Live dashboard (auto-refresh co 10s)
+python3 net_monitor.py --live              # Live dashboard (auto-refresh every 10s)
 python3 net_monitor.py --live --port 9000  # Live dashboard on custom port
 python3 net_monitor.py --list              # List all sessions
 python3 net_monitor.py --clean             # Delete all collected data
@@ -159,7 +159,7 @@ A PID-based lockfile prevents running two monitoring instances simultaneously (w
 Feed collected data to Claude Code / Claude Cowork:
 
 ```
-Przeanalizuj logi z ~/.net_monitor/ uzywajac prompta z analyze_prompt.md
+Analyze logs from ~/.net_monitor/ using the prompt from analyze_prompt.md
 ```
 
 ## Platform Support
