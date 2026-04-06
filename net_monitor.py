@@ -2153,7 +2153,7 @@ tr:hover td {{ background: var(--bg3); }}
 .conn-cell .cl {{ font-size: 0.72em; color: var(--fg2); }}
 .conn-cell .cv {{ font-size: 0.88em; font-weight: 500; }}
 .timeline-wrap {{ overflow-x:auto; margin:8px 0; }}
-.timeline-inner {{ display:inline-flex; flex-direction:column; min-width:100%; padding:0 20px; }}
+.timeline-inner {{ display:inline-flex; flex-direction:column; min-width:100%; padding:28px 20px 0; }}
 .timeline {{ display:flex; gap:1px; height:40px; align-items:flex-end; }}
 .tbar {{
   min-width:4px; width:6px; flex-shrink:0; border-radius:2px 2px 0 0;
