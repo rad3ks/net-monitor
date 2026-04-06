@@ -2668,17 +2668,15 @@ function renderRssiChart(history) {{
   const maxR = Math.max(...vals);
   const range = Math.max(maxR - minR, 10);
   const avg = (vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1);
-  const mn = Math.min(...vals);
-  const mx = Math.max(...vals);
 
   let html = `<div style="font-size:0.82em;color:var(--fg2);margin-bottom:4px">` +
-    `Min: <b>${{mn}}</b> dBm | Max: <b>${{mx}}</b> dBm | Avg: <b>${{avg}}</b> dBm | ${{t('samples')}}: ${{vals.length}}</div>`;
+    `Min: <b>${{minR}}</b> dBm | Max: <b>${{maxR}}</b> dBm | Avg: <b>${{avg}}</b> dBm | ${{t('samples')}}: ${{vals.length}}</div>`;
   // Build bars
   let bars = '';
   const labels = [];
   history.forEach(h => {{
     const pct = Math.max(10, ((h.rssi - minR + 5) / (range + 10)) * 100);
-    const c = h.rssi >= -50 ? 'var(--green)' : h.rssi >= -65 ? 'var(--green)' :
+    const c = h.rssi >= -65 ? 'var(--green)' :
       h.rssi >= -75 ? 'var(--yellow)' : 'var(--red)';
     const time = h.ts ? h.ts.split('T')[1]?.substring(0,5) || '' : '';
     labels.push(time);
