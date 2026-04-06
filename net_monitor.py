@@ -2788,7 +2788,7 @@ function renderStabilityCards(s) {{
       </div>
       <div style="margin-top:10px;font-size:0.82em;cursor:pointer" onclick="this.querySelector('.toggle-arrow').classList.toggle('open');this.querySelector('.coll-body').classList.toggle('open')">
         <div style="color:var(--fg2);margin-bottom:4px"><span class="toggle-arrow">&#9654;</span> ${{t('details')}} (${{rtt.length}})</div>
-        <div class="coll-body" style="display:none">
+        <div class="coll-body">
         <table><tr><th>${{t('time')}}</th><th>${{t('target')}}</th><th>${{t('min')}}</th><th>${{t('avg')}}</th><th>${{t('max')}}</th><th>${{t('jitter_hdr')}}</th><th>${{t('stddev')}}</th></tr>
         ${{rtt.slice(-20).map(r => {{
           const jc = (r.jitter||0) > 30 ? 'color:var(--red)' : (r.jitter||0) > 15 ? 'color:var(--yellow)' : '';
@@ -2927,15 +2927,26 @@ renderStatusBar();
     const el = e.target.closest('[data-tip]');
     if (el) {{
       tip.textContent = el.getAttribute('data-tip');
+      tip.style.visibility = 'hidden';
       tip.style.display = 'block';
+      tip.getBoundingClientRect(); // force reflow
       const r = el.getBoundingClientRect();
-      tip.style.left = (r.left + r.width/2 - tip.offsetWidth/2) + 'px';
-      tip.style.top = (r.top - tip.offsetHeight - 4) + 'px';
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      const left = Math.max(4, Math.min(r.left + r.width/2 - tw/2, window.innerWidth - tw - 4));
+      let top = r.top - th - 4;
+      if (top < 4) top = r.bottom + 4;
+      tip.style.left = left + 'px';
+      tip.style.top = top + 'px';
+      tip.style.visibility = 'visible';
     }}
   }});
   document.addEventListener('mouseout', function(e) {{
-    if (e.target.closest('[data-tip]')) tip.style.display = 'none';
+    const el = e.target.closest('[data-tip]');
+    if (el && (!e.relatedTarget || !el.contains(e.relatedTarget))) {{
+      tip.style.display = 'none';
+    }}
   }});
+  document.addEventListener('scroll', function() {{ tip.style.display = 'none'; }}, true);
 }})();
 {live_js}
 </script>
