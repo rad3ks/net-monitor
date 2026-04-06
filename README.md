@@ -95,7 +95,7 @@ If hop 1 is clean and problems start at hop 2+ — the ISP is at fault.
 python3 net_monitor.py                     # Run monitoring (Ctrl+C to stop)
 python3 net_monitor.py --report            # Generate Markdown + JSON report
 python3 net_monitor.py --dashboard         # Generate interactive HTML dashboard
-python3 net_monitor.py --live              # Live dashboard (auto-refresh co 5s)
+python3 net_monitor.py --live              # Live dashboard (auto-refresh co 10s)
 python3 net_monitor.py --live --port 9000  # Live dashboard on custom port
 python3 net_monitor.py --list              # List all sessions
 python3 net_monitor.py --clean             # Delete all collected data
@@ -138,7 +138,7 @@ python3 net_monitor.py --dashboard
 
 ### Live Dashboard
 
-Auto-refreshing dashboard served via local HTTP server. Polls for new data every 5 seconds.
+Auto-refreshing dashboard served via local HTTP server. Polls for new data every 10 seconds.
 
 ```bash
 # Terminal 1: monitoring
@@ -148,7 +148,7 @@ python3 net_monitor.py
 python3 net_monitor.py --live
 ```
 
-Green **LIVE** indicator in the top-right corner shows connection status and last update time.
+**Updated** indicator in the sidebar shows time since last refresh and connection status.
 
 ## Safety
 
