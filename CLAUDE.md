@@ -61,3 +61,6 @@ To analyze collected data:
 Przeanalizuj logi z ~/.net_monitor/ uzywajac prompta z analyze_prompt.md
 ```
 Claude reads `connection_info.json` + `events.jsonl` from each session and produces diagnosis with ISP counterarguments.
+
+## PR workflow
+After completing all changes, always create a PR and run code review (CR) in a loop — fix all reported issues until CR returns no problems, then merge.

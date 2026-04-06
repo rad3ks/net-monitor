@@ -2152,9 +2152,11 @@ tr:hover td {{ background: var(--bg3); }}
 .conn-cell {{ background: var(--bg3); padding: 8px 12px; border-radius: 6px; }}
 .conn-cell .cl {{ font-size: 0.72em; color: var(--fg2); }}
 .conn-cell .cv {{ font-size: 0.88em; font-weight: 500; }}
-.timeline {{ display:flex; gap:1px; height:40px; align-items:flex-end; margin:8px 0; }}
+.timeline-wrap {{ overflow-x:auto; margin:8px 0; }}
+.timeline-inner {{ display:inline-flex; flex-direction:column; min-width:100%; }}
+.timeline {{ display:flex; gap:1px; height:40px; align-items:flex-end; }}
 .tbar {{
-  min-width:3px; flex:1; border-radius:2px 2px 0 0; max-width:10px;
+  min-width:4px; width:6px; flex-shrink:0; border-radius:2px 2px 0 0;
   cursor:pointer; position:relative;
 }}
 .tbar:hover::after {{
@@ -2163,6 +2165,8 @@ tr:hover td {{ background: var(--bg3); }}
   padding:4px 8px; border-radius:4px; font-size:0.72em; white-space:nowrap; z-index:10;
   pointer-events:none;
 }}
+.timeline-axis {{ display:flex; gap:1px; font-size:0.65em; color:var(--fg3); margin-top:2px; }}
+.timeline-axis span {{ min-width:4px; width:6px; flex-shrink:0; text-align:center; overflow:visible; white-space:nowrap; }}
 .empty {{ color: var(--fg3); text-align: center; padding: 40px; }}
 .hop-ip {{ font-family: monospace; color: var(--blue); }}
 .hop-zone {{ font-size: 0.8em; padding: 2px 6px; border-radius: 4px; }}
@@ -2584,26 +2588,44 @@ function renderSession(s) {{
 
 function renderTimeline(timeline) {{
   if (!timeline || !timeline.length) return '<div style="color:var(--fg3)">' + t('no_data') + '</div>';
-  let html = '<div class="timeline">';
-  timeline.forEach(ev => {{
+  // Build bars
+  let bars = '';
+  const labels = [];
+  timeline.forEach((ev, i) => {{
+    const time = ev.ts ? ev.ts.split('T')[1]?.substring(0,5) || '' : '';
+    labels.push(time);
     if (ev.event === 'drop_start') {{
-      html += `<div class="tbar" style="height:100%;background:var(--red);opacity:0.3"
+      bars += `<div class="tbar" style="height:100%;background:var(--red);opacity:0.3"
         data-tip="${{escHtml(t('drop_start') + ' ' + (ev.zone||''))}}"></div>`;
     }} else if (ev.event === 'drop_end') {{
-      html += `<div class="tbar" style="height:100%;background:var(--red)"
+      bars += `<div class="tbar" style="height:100%;background:var(--red)"
         data-tip="${{escHtml(t('drop_tooltip') + ' ' + ev.duration + 's ' + (ev.zone||''))}}"></div>`;
     }} else {{
       const total = (ev.ok||0) + (ev.fail||0);
       const pct = total > 0 ? ev.ok/total : 1;
       const h = Math.max(20, pct * 100);
       const c = pct >= 1 ? 'var(--green)' : pct >= 0.8 ? 'var(--yellow)' : 'var(--red)';
-      const time = ev.ts ? ev.ts.split('T')[1]?.substring(0,8) || '' : '';
-      html += `<div class="tbar" style="height:${{h}}%;background:${{c}}"
+      bars += `<div class="tbar" style="height:${{h}}%;background:${{c}}"
         data-tip="${{escHtml(time + ' ' + (ev.target||'') + ' ' + ev.ok + '/' + total + ' OK')}}"></div>`;
     }}
   }});
-  html += '</div>';
-  return html;
+  // Build time axis — show ~10 labels evenly spaced
+  let axis = '';
+  const n = labels.length;
+  const step = Math.max(1, Math.floor(n / 10));
+  for (let i = 0; i < n; i++) {{
+    if (i % step === 0 && labels[i]) {{
+      axis += `<span>${{escHtml(labels[i])}}</span>`;
+    }} else {{
+      axis += '<span></span>';
+    }}
+  }}
+  return `<div class="timeline-wrap">
+    <div class="timeline-inner">
+      <div class="timeline">${{bars}}</div>
+      <div class="timeline-axis">${{axis}}</div>
+    </div>
+  </div>`;
 }}
 
 function renderHopTable(hops, totalRuns) {{
